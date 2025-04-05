@@ -3,6 +3,7 @@ using ChainRulesCore
 using FiniteDifferences
 using PyCall
 using Zygote
+using MarineHydro
 
 cpt = pyimport("capytaine")
 resolution = (14,14)
@@ -182,12 +183,12 @@ function ChainRulesCore.rrule(::typeof(sphere_faces), r)
 end
 
 
-  # test differentiability
-# function func(r1,dx1)
-#     m = differentiableMesh(r1,dx1)
-#     area = m.areas
-#     normal = m.normals
-#     return sum(area .* normal)
-# end
+ # test differentiability
+function func(r1)
+    m = differentiableMesh(r1)
+    area = m.areas
+    normal = m.normals
+    return sum(area .* normal)
+end
 
-# Zygote.jacobian(x->func(x[1],x[2]),[2.0,3.0])
+Zygote.jacobian(x->func(x[1]),[2.0])

@@ -3,9 +3,10 @@ using ChainRulesCore
 using FiniteDifferences
 using PyCall
 using Zygote
+using MarineHydro
 
 cpt = pyimport("capytaine")
-resolution = (6,6)
+resolution = (10,10)
 
 function cptMeshPair(radius,dx1)
     radius1  = radius #change this to radius for pair sphere study where both are indential ; this is to only get data for getting sensitivity of one sphere with other.da11/dr2
@@ -209,12 +210,12 @@ function ChainRulesCore.rrule(::typeof(sphere_faces), r,dx1)
     return Mesh(vertices,faces,centers,normals,areas,radii,nvertices,nfaces) #
 end
 
-using MarineHydro
-  #test differentiability
-function func(r1,dx1)
-    mesh = differentiableMeshPairs(r1,dx1)
-    S, D = assemble_matrices((Rankine(), RankineReflected(), GFWu()), mesh, 0.1)
-    return sum(imag(D)) + sum(real(S))
-end
+# using MarineHydro
+#   #test differentiability
+# function func(r1,dx1)
+#     mesh = differentiableMeshPairs(r1,dx1)
+#     S, D = assemble_matrices((Rankine(), RankineReflected(), GFWu()), mesh, 1.0)
+#     return sum(imag(D)) + sum(real(S))
+# end
 
-Zygote.jacobian(x->func(x[1],x[2]),[2.0,3.0])
+# Zygote.jacobian(x->func(x[1],x[2]),[2.0,3.0])

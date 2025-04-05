@@ -96,23 +96,23 @@ Assembles the influence matrices based on the tuple of provided Green's function
 - A tuple of assembled matrices. S and (D or K) depending on the flag.
 """
 function assemble_matrices(green_functions, mesh, wavenumber; direct=true)
-    # Use comprehensions to build S and D matrices
-    S = @inbounds [sum(-1/2τ̅ * Complex(integral(gf, element(mesh, i), element(mesh, j), wavenumber)) for gf in green_functions) for i in 1:mesh.nfaces, j in 1:mesh.nfaces]
+    n = mesh.nfaces
+    S = zeros(ComplexF64, n, n)
+    D = zeros(ComplexF64, n, n)
+    for i in 1:n, j in 1:n
+        element_i = element(mesh, i)
+        element_j = element(mesh, j)
+        normal = direct ? element_j.normal : element_i.normal
+        
+        integral_res, integral_gradient_res = compute_influence_coefficients(element_i, element_j, wavenumber, direct, green_functions)
     
-    D = @inbounds [begin
-            element_i = element(mesh, i)
-            element_j = element(mesh, j)
-
-            # Select the normal based on direct flag
-            normal = direct ? element_j.normal : element_i.normal
-
-            sum(-1/2τ̅ * Complex(normal' * integral_gradient(gf, element_i, element_j, wavenumber; with_respect_to_first_variable=!direct)) for gf in green_functions)
-        end for i in 1:mesh.nfaces, j in 1:mesh.nfaces]
-
-    # Add diagonal elements to D
+        S[i, j] = sum(-1 / 2 * τ̅ * Complex(integral_res))
+        D[i, j] = sum(-1 / 2 * τ̅ * Complex(normal' * integral_gradient_res))
+    end
+    
     @inbounds begin
         @views begin
-            D1 = D .+ Diagonal(0.5 .* I(mesh.nfaces))
+            D .= D .+ 0.5 .* I(mesh.nfaces)
         end
     end
 
