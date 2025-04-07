@@ -2,7 +2,7 @@ using Plots
 using CSV
 using DataFrames
 using MarineHydro
-include("/home/cornell/BEMJulia/BEM.jl/paper/meshGradients_pair.jl")
+include("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/meshGradients_pair.jl")
  #takes a while depending on this - some faces_max_radius gives weird answer
 #check meshes.jl to change faces_max_radius.
 radius_range = [1,2,3,4,5]
@@ -50,21 +50,23 @@ function damping_off_diagonal(radius,omega ,dx1)
     return B12
 end
 
-
+using MarineHydro
 # Set parameters --change ii,ij depending on which entry of A,B
 g = 9.8 
 heave = [0, 0, 1]  # Heave
-dx_r_ratios = collect(range(1.5, stop=15.5, step=1))
+dx_r_ratios = collect(range(1.5, stop=40.5, step=2))
 kr_values = collect(range(0.5, stop=12.0, step=1.0))  # k*r dimensionless parameter
 r = 1.0   
 omega = 1.03
 #check with heuristics that the  - plot sensitivity of added mass and damping with dx and see if they go to zero or low.
-data = DataFrame(A12_grad_r=Float64[], B12_grad_r =Float64[], dx = Float64[])
+data = DataFrame(A12_grad_r=Float64[], B12_grad_r =Float64[], dx = Float64[], A12=Float64[], B12=Float64[])
 for dx in dx_r_ratios
     @show dx
     A12_grad_r, = Zygote.gradient(x -> added_mass_off_diagonal(r,omega ,x), dx) #at fix r = 1.0
     B12_grad_r, =  Zygote.gradient(x -> damping_off_diagonal(r,omega ,x), dx)
-    push!(data, (A12_grad_r, B12_grad_r, dx))
+    A12 = added_mass_off_diagonal(r,omega ,dx)
+    B12 = damping_off_diagonal(r,omega ,dx)
+    push!(data, (A12_grad_r, B12_grad_r, dx, A12, B12))
 end
 
 CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/12_heuristics_dx_DELhommeau.csv", data)
