@@ -22,7 +22,7 @@ function added_mass_off_diagonal(radius,omega ,dx1)
     sphere_1_heave_normal = [element_is_in_sphere_1(j) ? mesh.normals[j,:]' * [0.0, 0.0, 1.0] : 0.0 for j in 1:total_nfaces]
     sphere_2_heave_normal = [element_is_in_sphere_2(j) ? mesh.normals[j,:]' * [0.0, 0.0, 1.0] : 0.0 for j in 1:total_nfaces]
     k = omega^2 / 9.81  # Wave number
-    S, D = assemble_matrices((Rankine(), RankineReflected(), GFWu()), mesh, k)
+    S, D = assemble_matrices((Rankine(), RankineReflected(), ExactGuevelDelhommeau()), mesh, k)
     potential = MarineHydro.solve(D, S, -1im * omega * sphere_1_heave_normal)
     pressure = 1im * 1000 * omega * potential
     force = -sum(pressure .* sphere_2_heave_normal .* mesh.areas)
@@ -40,7 +40,7 @@ function damping_off_diagonal(radius,omega ,dx1)
     sphere_1_heave_normal = [element_is_in_sphere_1(j) ? mesh.normals[j,:]' * [0.0, 0.0, 1.0] : 0.0 for j in 1:total_nfaces]
     sphere_2_heave_normal = [element_is_in_sphere_2(j) ? mesh.normals[j,:]' * [0.0, 0.0, 1.0] : 0.0 for j in 1:total_nfaces]
     k = omega^2 / 9.81  # Wave number
-    S, D = assemble_matrices((Rankine(), RankineReflected(), GFWu()), mesh, k) # Assemble matrices tuple error -- use default
+    S, D = assemble_matrices((Rankine(), RankineReflected(), ExactGuevelDelhommeau()), mesh, k) # Assemble matrices tuple error -- use default
     potential = MarineHydro.solve(D, S, -1im * omega * sphere_1_heave_normal)
     pressure = 1im * 1000 * omega * potential
     # force = -sum(pressure .* sphere_1_heave_normal .* mesh.areas)
