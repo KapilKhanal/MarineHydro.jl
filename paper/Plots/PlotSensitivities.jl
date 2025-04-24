@@ -15,15 +15,19 @@ default(
 )
 
 data = CSV.File("MarineHydro.jl/paper/Plots/11_heuristics_dx_DELhommeau.csv") |> DataFrame
+k = omega^2/9.8
 
-plot(data.dx[1:5], data.A11_grad_r[1:5], label=L"\frac{\partial A_{11}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", marker=:circle, lw=2, color=bluishgreen,legend=:right)
-plot!(data.dx[1:5], data.B11_grad_r[1 :5], label=L"\frac{\partial B_{11}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", marker=:square, lw=2, color=vermillion)
-vline!([5], label="PWA heuristics\n (Singh and Babarit (2013))", lw=2, linestyle=:dash, color=orange)
+x_values = k .* data.dx
+period = 2*pi*9.8/(k^2)
+
+
+plot(k .* data.dx, data.A11_grad_r, label=L"\frac{\partial A_{11}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", marker=:circle, lw=2, color=bluishgreen,legend=:right)
+plot!(k .* data.dx, data.B11_grad_r, label=L"\frac{\partial B_{11}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", marker=:square, lw=2, color=vermillion)
+vline!(k .* [10], label="PWA heuristics\n (Singh and Babarit (2013))", lw=2, linestyle=:dash, color=orange)
 
 # Labels and Title
-xlabel!("separation distance (x) [m]")
-ylabel!("Sensitivity values")
-
+xlabel!("kx",fontsize=15)
+ylabel!("Sensitivity values",fontsize=15)
 
 # Save the plot
 savefig("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/11_heuristics_dx.pdf")
@@ -64,7 +68,7 @@ p1 = heatmap(
     yguidefontsize=24,
     titlefontsize=16,
     tickfontsize=8,
-    colorbar_title= L"\partial A/\partial r", #switch
+    colorbar_title=L"\frac{\partial A_{11}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", #switch
     colorbar_titlefontsize=15,
     colorbar_titleorientation=:vertical
 )
