@@ -25,11 +25,11 @@ function added_mass_off_diagonal(radius,omega ,dx1)
     S, D = assemble_matrices((Rankine(), RankineReflected(), ExactGuevelDelhommeau()), mesh, k)
     potential = MarineHydro.solve(D, S, -1im * omega * sphere_1_heave_normal)
     pressure = 1im * 1000 * omega * potential
-    force = -sum(pressure .* sphere_2_heave_normal .* mesh.areas)
-    A12 = real(force) / omega^2
-    # force = -sum(pressure .* sphere_1_heave_normal .* mesh.areas)
-    # A11 = real(force) / omega^2
-    return A12
+    # force = -sum(pressure .* sphere_2_heave_normal .* mesh.areas)
+    # A12 = real(force) / omega^2
+    force = -sum(pressure .* sphere_1_heave_normal .* mesh.areas)
+    A11 = real(force) / omega^2
+    return A11
 end
 
 function damping_off_diagonal(radius,omega ,dx1)  
@@ -43,33 +43,34 @@ function damping_off_diagonal(radius,omega ,dx1)
     S, D = assemble_matrices((Rankine(), RankineReflected(), ExactGuevelDelhommeau()), mesh, k) # Assemble matrices tuple error -- use default
     potential = MarineHydro.solve(D, S, -1im * omega * sphere_1_heave_normal)
     pressure = 1im * 1000 * omega * potential
-    # force = -sum(pressure .* sphere_1_heave_normal .* mesh.areas)
-    # B11 = imag(force) / omega
-    force = -sum(pressure .* sphere_2_heave_normal .* mesh.areas)
-    B12 = imag(force) / omega
-    return B12
+    force = -sum(pressure .* sphere_1_heave_normal .* mesh.areas)
+    B11 = imag(force) / omega
+    # force = -sum(pressure .* sphere_2_heave_normal .* mesh.areas)
+    # B12 = imag(force) / omega
+    return B11
 end
 
 using MarineHydro
 # Set parameters --change ii,ij depending on which entry of A,B
 g = 9.8 
 heave = [0, 0, 1]  # Heave
-dx_r_ratios = collect(range(1.5, stop=40.5, step=2))
+dx_r_ratios = collect(range(1.5, stop=200.5, step=10))
 kr_values = collect(range(0.5, stop=12.0, step=1.0))  # k*r dimensionless parameter
 r = 1.0   
 omega = 1.03
-#check with heuristics that the  - plot sensitivity of added mass and damping with dx and see if they go to zero or low.
-data = DataFrame(A12_grad_r=Float64[], B12_grad_r =Float64[], dx = Float64[], A12=Float64[], B12=Float64[])
+
+# #check with heuristics that the  - plot sensitivity of added mass and damping with dx and see if they go to zero or low.
+data = DataFrame(A11_grad_r=Float64[], B11_grad_r =Float64[], dx = Float64[], A11=Float64[], B11=Float64[])
 for dx in dx_r_ratios
     @show dx
-    A12_grad_r, = Zygote.gradient(x -> added_mass_off_diagonal(r,omega ,x), dx) #at fix r = 1.0
-    B12_grad_r, =  Zygote.gradient(x -> damping_off_diagonal(r,omega ,x), dx)
-    A12 = added_mass_off_diagonal(r,omega ,dx)
-    B12 = damping_off_diagonal(r,omega ,dx)
-    push!(data, (A12_grad_r, B12_grad_r, dx, A12, B12))
+    A11_grad_r, = Zygote.gradient(x -> added_mass_off_diagonal(r,omega ,x), dx) #at fix r = 1.0
+    B11_grad_r, =  Zygote.gradient(x -> damping_off_diagonal(r,omega ,x), dx)
+    A11 = added_mass_off_diagonal(r,omega ,dx)
+    B11 = damping_off_diagonal(r,omega ,dx)
+    push!(data, (A11_grad_r, B11_grad_r, dx, A11, B11))
 end
 
-CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/12_heuristics_dx_DELhommeau.csv", data)
+CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/11_heuristics_dx_DELhommeau.csv", data)
 
 
 # data = DataFrame(dx_r_ratio=Float64[], kr=Float64[], grad_r = Float64[])
