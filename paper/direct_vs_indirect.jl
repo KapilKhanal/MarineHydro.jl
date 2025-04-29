@@ -4,6 +4,7 @@ using FiniteDifferences
 using Test
 using ColorTypes
 using Plots
+using LaTeXStrings
 include("MeshGradients_singlebody.jl")
 
 orange = RGB(230/255,159/255,0/255) 
@@ -55,10 +56,10 @@ for (i, r) in enumerate(radius_range)
         direct_gradients[i] = grads_direct
     end
 
-plot(collect(radius_range), indirect_gradients , xlabel="r(radius)", ylabel="∂A_∂r", label="indirect BIE", marker = "*",color = vermillion,linestyle = :dash)
-plot!(collect(radius_range), direct_gradients, xlabel="r(radius)", ylabel="∂A_∂r", label="direct BIE",marker = "*",color = bluishgreen,linestyle = :solid)
+plot(collect(radius_range), indirect_gradients ,xlabel=L"r \ [m]", ylabel=L"\frac{\partial A}{\partial r}", label="indirect BIE", marker = "*",color = vermillion,linestyle = :dash)
+plot!(collect(radius_range), direct_gradients, xlabel=L"r \ [m]", ylabel=L"\frac{\partial A}{\partial r}", label="direct BIE",marker = "*",color = bluishgreen,linestyle = :solid)
 
-savefig("/home/cornell/BEMJulia/MarineHydro.jl/paper/Plots/direct_indirect_ad_added_mass_heave_with_radius.pdf")
+savefig("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/direct_indirect_ad_added_mass_heave_with_radius.pdf")
 
 
 for (i, r) in enumerate(radius_range)
@@ -68,7 +69,7 @@ for (i, r) in enumerate(radius_range)
     direct_gradients[i] = grads_direct
 end
 
-plot(collect(radius_range), indirect_gradients , xlabel="r(radius)", ylabel="∂B_∂r", label="indirect BIE", marker = "*",color = vermillion,linestyle = :dash)
-plot!(collect(radius_range), direct_gradients, xlabel="r(radius)", ylabel="∂B_∂r", label="direct BIE",marker = "*",color = bluishgreen,linestyle = :solid)
+plot(collect(radius_range), indirect_gradients , xlabel=L"r \ [m]", ylabel=L"\frac{\partial B}{\partial r}", label="indirect BIE", marker = "*",color = vermillion,linestyle = :dash)
+plot!(collect(radius_range), direct_gradients, xlabel=L"r \ [m]", ylabel=L"\frac{\partial B}{\partial r}", label="direct BIE",marker = "*",color = bluishgreen,linestyle = :solid)
 
-savefig("/home/cornell/BEMJulia/MarineHydro.jl/paper/Plots/direct_indirect_ad_damping_heave_with_radius.pdf")
+savefig("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/direct_indirect_ad_damping_heave_with_radius.pdf")

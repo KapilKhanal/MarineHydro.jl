@@ -4,6 +4,8 @@ using FiniteDifferences
 using Test
 using ColorTypes
 using Plots
+using LaTeXStrings
+# import Pkg; Pkg.add("PyPlot")
 include("MeshGradients_singlebody.jl")
 include("BemProgram.jl")
 
@@ -59,12 +61,12 @@ for (i, r) in enumerate(radius_range)
 println(fd_julia)
 println(_gradients )
 print(_gradients .- fd_julia )
-plot(collect(radius_range), _gradients , xlabel="r [m]", ylabel="∂A_∂r", label="AD", marker = (:circle, 6, 0.8, :match),color = vermillion,linestyle = :dash)
-plot!(collect(radius_range), fd_julia, xlabel="r [m]", ylabel="∂A_∂r", label="FD",marker = "*",color = bluishgreen,linestyle = :solid)
+pyplot()
+plot(collect(radius_range), _gradients , xlabel= L"r\ [m]", label="AD", marker = (:circle, 6, 0.8, :match),color = vermillion,linestyle = :dash)
+plot!(collect(radius_range), fd_julia, xlabel= L"r\ [m]",ylabel="∂A/∂r", label="FD",marker = "*",color = bluishgreen,linestyle = :solid,yguidefontrotation=-90,fontsize=18)
+savefig("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/fd_ad_added_mass_heave_with_radius.pdf")
 
-savefig("/home/cornell/BEMJulia/MarineHydro.jl/paper/Plots/fd_ad_added_mass_heave_with_radius.pdf")
-
-#### damping ###
+# #### damping ###
 damping_fd(radius) = damping_program(radius,w,heave)
 fd_julia = [central_fdm(3, 1)(damping_fd, r) for r in radius_range] #check w omega
 _gradients = Array{Any}(undef, length(radius_range))
@@ -76,10 +78,10 @@ end
 println(fd_julia)
 println(_gradients )
 print(_gradients .- fd_julia )
-plot(collect(radius_range), _gradients , xlabel="r [m]", ylabel="∂B_∂r", label="AD", marker = (:circle, 6, 0.8, :match),color = vermillion,linestyle = :dash)
-plot!(collect(radius_range), fd_julia, xlabel="r [m]", ylabel="∂B_∂r", label="FD",marker = "*",color = bluishgreen,linestyle = :solid)
-
-savefig("/home/cornell/BEMJulia/MarineHydro.jl/paper/Plots/fd_ad_damping_heave_with_radius.pdf")
+plot(collect(radius_range), _gradients , xlabel=L"r\ [m]", ylabel=L"\frac{\partial B}{\partial r}", label="AD", marker = (:circle, 6, 0.8, :match),color = vermillion,linestyle = :dash)
+plot!(collect(radius_range), fd_julia, xlabel=L"r\ [m]", ylabel=L"\frac{\partial B}{\partial r}", label="FD",marker = "*",color = bluishgreen,linestyle = :solid)
+plot!(ylabel=L"\frac{\partial B}{\partial r}", yrotation=90)
+savefig("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/fd_ad_damping_heave_with_radius.pdf")
 
 
 
@@ -95,9 +97,10 @@ for (i, omega) in enumerate(omega_range)
 
 #### damping
 
-plot(omega_range, fd_julia, xlabel="ω (rad/s)", ylabel="∂A_∂ω", label="FD",marker = (:circle, 6, 0.8, :match),color = bluishgreen,linestyle = :solid)
-plot!(omega_range, _gradients , xlabel="ω (rad/s)", ylabel="∂A_∂ω", label="AD", marker = "*",color = vermillion,linestyle = :dash)
-savefig("/home/cornell/BEMJulia/MarineHydro.jl/paper/Plots/fd_ad_added_mass_omega_heave.pdf")
+plot(omega_range, fd_julia, xlabel=L"\omega \ (rad/s)", ylabel=L"\frac{\partial A}{\partial \omega}", label="FD",marker = (:circle, 6, 0.8, :match),color = bluishgreen,linestyle = :solid)
+plot!(omega_range, _gradients , xlabel=L"\omega \ (rad/s)", ylabel=L"\frac{\partial A}{\partial \omega}", label="AD", marker = "*",color = vermillion,linestyle = :dash)
+plot!(ylabel=L"\frac{\partial A}{\partial \omega}", yrotation=90)
+savefig("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/fd_ad_added_mass_omega_heave.pdf")
 
 radius = 1
 omega_range  = collect(range(0.01, stop=4, step=0.4))
@@ -110,6 +113,7 @@ for (i, omega) in enumerate(omega_range)
 
 
 
-plot(omega_range, fd_julia, xlabel="ω (rad/s)", ylabel="∂B_∂ω", label="FD",marker = (:circle, 6, 0.8, :match),color = bluishgreen,linestyle = :solid)
-plot!(omega_range, _gradients , xlabel="ω (rad/s)", ylabel="∂B_∂ω", label="AD", marker = "*",color = vermillion,linestyle = :dash)
-savefig("/home/cornell/BEMJulia/MarineHydro.jl/paper/Plots/fd_ad_damping_omega_heave.pdf")
+plot(omega_range, fd_julia, xlabel=L"\omega \ (rad/s)", ylabel=L"\frac{\partial B}{\partial \omega}", label="FD",marker = (:circle, 6, 0.8, :match),color = bluishgreen,linestyle = :solid)
+plot!(omega_range, _gradients , xlabel=L"\omega \ (rad/s)", ylabel=L"\frac{\partial B}{\partial \omega}", label="AD", marker = "*",color = vermillion,linestyle = :dash)
+plot!(ylabel=L"\frac{\partial B}{\partial \omega}", yrotation=90)
+savefig("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/fd_ad_damping_omega_heave.pdf")

@@ -14,64 +14,64 @@ default(
     legendfont = font(10)   # Legend text
 )
 
-data = CSV.File("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/12_heuristics_dx_DELhommeau_singleperturb.csv") |> DataFrame
-omega = 1.03
+data = CSV.File("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/more_11_heuristics_dx_DELhommeau_singleperturb.csv") |> DataFrame
+omega = 1.03 # ~ 6s period for which sing and babarit heuristics are supposed to hold
 k = omega^2/9.8
 
 period = 2*pi*9.8/(k^2)
 
 
-plot( data.dx, data.A12_grad_r, label=L"\frac{\partial A_{12}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", marker=:circle, lw=2, color=bluishgreen,legend=:right)
-plot!(data.dx, data.B12_grad_r, label=L"\frac{\partial B_{12}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", marker=:square, lw=2, color=vermillion)
-vline!( [10], label="PWA heuristics\n (Singh and Babarit (2013))", lw=2, linestyle=:dash, color=orange)
+# plot(k .* data.dx, data.A11_grad_r, label=L"\frac{\partial A_{11}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", marker=:circle, lw=2, color=bluishgreen,legend=:top)
+# plot!(k .* data.dx, data.B11_grad_r, label=L"\frac{\partial B_{11}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", marker=:square, lw=2, color=vermillion)
+# vline!( k.* [10], label="PWA heuristics\n (Singh and Babarit (2013))", lw=2, linestyle=:dash, color=orange) # five times the dimensionless diameter == characterstics dimension?
 
-# Labels and Title
-xlabel!("kx",fontsize=18)
-ylabel!("Sensitivity values",fontsize=18)
+# # Labels and Title 
+# xlabel!("kx",fontsize=18)
+# ylabel!("Sensitivity values",fontsize=18)
 
-# Save the plot
-savefig("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/12_heuristics_dx_r2.pdf")
+# # Save the plot
+# savefig("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/11_heuristics_dx_r2.pdf")
 
 
 # # #switch for damping and added mass here and corresponding labels , columns below
-# data = CSV.File("/home/cornell/BEMJulia/MarineHydro.jl/paper/Plots/added_mass_data_dimensionless.csv") |> DataFrame
+data = CSV.File("/home/cornell/BEMJulia/MarineHydro.jl/paper/Plots/added_mass_data_dimensionless.csv") |> DataFrame
 
-# # Unique values for dimensionless parameters
-# dx_r_ratios = unique(data.dx_r_ratio)
-# kr_values = unique(data.kr)
+# Unique values for dimensionless parameters
+dx_r_ratios = unique(data.dx_r_ratio)
+kr_values = unique(data.kr)
 
-# dx_values = unique(data.dx_r_ratio)
-# kr_values =  unique(data.kr)
+dx_values = unique(data.dx_r_ratio)
+kr_values =  unique(data.kr)
 
-# grad_r_matrix = reshape(data.grad_r, length(dx_values), length(kr_values))
+grad_r_matrix = reshape(data.grad_r, length(dx_values), length(kr_values))
 
-# # Normalize function
-# function normalize(matrix)
-#     min_val = minimum(matrix)
-#     max_val = maximum(matrix)
-#     println("Maximum: $max_val")
-#     println("Minimum: $min_val")
-#     return (matrix .- min_val) ./ (max_val - min_val)
-# end
+# Normalize function
+function normalize(matrix)
+    min_val = minimum(matrix)
+    max_val = maximum(matrix)
+    println("Maximum: $max_val")
+    println("Minimum: $min_val")
+    return (matrix .- min_val) ./ (max_val - min_val)
+end
 
-# # Normalize gradient matrices
-# grad_r_matrix = normalize(grad_r_matrix)
+# Normalize gradient matrices
+grad_r_matrix = normalize(grad_r_matrix)
 
 
 # # Plot heatmap using dimensionless parameters
-# p1 = heatmap(
-#     dx_r_ratios, kr_values, grad_r_matrix,
-#     ylabel="Kr",
-#     xlabel="x/r",
-#     color=:magma,
-#     xguidefontsize=24,
-#     yguidefontsize=24,
-#     titlefontsize=16,
-#     tickfontsize=8,
-#     colorbar_title=L"\frac{\partial A_{11}(\omega = 1.03\,\mathrm{rad/s})}{\partial r_2}", #switch
-#     colorbar_titlefontsize=15,
-#     colorbar_titleorientation=:vertical
-# )
+p1 = heatmap(
+    dx_r_ratios, kr_values, grad_r_matrix,
+    ylabel="kr",
+    xlabel="x/r",
+    color=:magma,
+    xguidefontsize=24,
+    yguidefontsize=24,
+    titlefontsize=16,
+    tickfontsize=8,
+    colorbar_title= "∂A/∂r", #switch
+    colorbar_titlefontsize=15,
+    colorbar_titleorientation=:vertical
+)
 
-# savefig("//home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/added_mass_dimensionless_grad_dr.pdf")
+savefig("//home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/added_mass_dimensionless_grad_dr.pdf")
 

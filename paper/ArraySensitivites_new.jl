@@ -25,11 +25,11 @@ function added_mass_off_diagonal(radius1,radius2,omega ,dx1)
     S, D = assemble_matrices((Rankine(), RankineReflected(), ExactGuevelDelhommeau()), mesh, k)
     potential = MarineHydro.solve(D, S, -1im * omega * sphere_1_heave_normal)
     pressure = 1im * 1000 * omega * potential
-    force = -sum(pressure .* sphere_2_heave_normal .* mesh.areas)
-    A12 = real(force) / omega^2
-    # force = -sum(pressure .* sphere_1_heave_normal .* mesh.areas)
-    # A11 = real(force) / omega^2
-    return A12
+    # force = -sum(pressure .* sphere_2_heave_normal .* mesh.areas)
+    # A12 = real(force) / omega^2
+    force = -sum(pressure .* sphere_1_heave_normal .* mesh.areas)
+    A11 = real(force) / omega^2
+    return A11
 end
 
 function damping_off_diagonal(radius1,radius2,omega ,dx1)  
@@ -43,11 +43,11 @@ function damping_off_diagonal(radius1,radius2,omega ,dx1)
     S, D = assemble_matrices((Rankine(), RankineReflected(), ExactGuevelDelhommeau()), mesh, k) # Assemble matrices tuple error -- use default
     potential = MarineHydro.solve(D, S, -1im * omega * sphere_1_heave_normal)
     pressure = 1im * 1000 * omega * potential
-    # force = -sum(pressure .* sphere_1_heave_normal .* mesh.areas)
-    # B11 = imag(force) / omega
-    force = -sum(pressure .* sphere_2_heave_normal .* mesh.areas)
-    B12 = imag(force) / omega
-    return B12
+    force = -sum(pressure .* sphere_1_heave_normal .* mesh.areas)
+    B11 = imag(force) / omega
+    # force = -sum(pressure .* sphere_2_heave_normal .* mesh.areas)
+    # B12 = imag(force) / omega
+    return B11
 end
 
 # test zygote computed with finite difference
@@ -69,56 +69,57 @@ using MarineHydro
 # Set parameters --change ii,ij depending on which entry of A,B
 g = 9.8 
 heave = [0, 0, 1]  # Heave
-dx_r_ratios = collect(range(2.0, stop=200.5, step=10))
+dx_r_ratios = collect(range(2.0, stop=200.5, step=4))
 kr_values = collect(range(0.5, stop=12.0, step=1.0))  # k*r dimensionless parameter
 r1 = 1.0   
 omega = 1.03
 r2 = 1.0
-# #check with heuristics that the  - plot sensitivity of added mass and damping with dx and see if they go to zero or low.
-data = DataFrame(A12_grad_r=Float64[], B12_grad_r =Float64[], dx = Float64[], A12=Float64[], B12=Float64[])
-for dx in dx_r_ratios
-    @show dx
-    A11_grad_r, = Zygote.gradient(r2 -> added_mass_off_diagonal(r1,r2,omega ,dx), r2) #at fix r = 1.0
-    B11_grad_r, =  Zygote.gradient(r2 -> damping_off_diagonal(r1,r2,omega ,dx), r2)
-    @show A11_grad_r
-    @show B11_grad_r
-    A11 = added_mass_off_diagonal(r1,r2,omega ,dx)
-    B11 = damping_off_diagonal(r1,r2,omega ,dx)
-    push!(data, (A11_grad_r, B11_grad_r, dx, A11, B11))
+
+# # #check with heuristics that the  - plot sensitivity of added mass and damping with dx and see if they go to zero or low.
+# data = DataFrame(A11_grad_r=Float64[], B11_grad_r =Float64[], dx = Float64[], A11=Float64[], B11=Float64[])
+# for dx in dx_r_ratios
+#     @show dx
+#     A11_grad_r, = Zygote.gradient(r2 -> added_mass_off_diagonal(r1,r2,omega ,dx), r2) #at fix r = 1.0
+#     B11_grad_r, =  Zygote.gradient(r2 -> damping_off_diagonal(r1,r2,omega ,dx), r2)
+#     @show A11_grad_r
+#     @show B11_grad_r
+#     A11 = added_mass_off_diagonal(r1,r2,omega ,dx)
+#     B11 = damping_off_diagonal(r1,r2,omega ,dx)
+#     push!(data, (A11_grad_r, B11_grad_r, dx, A11, B11))
+# end
+# print(data)
+# CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/more_11_heuristics_dx_DELhommeau_singleperturb.csv", data)
+
+
+dx_r_ratios = collect(range(1.5, stop=20.5, step=0.5))
+kr_values = collect(range(0.5, stop=12.0, step=0.1))  # k*r dimensionless parameter
+data = DataFrame(dx_r_ratio=Float64[], kr=Float64[], grad_r = Float64[])
+
+for dx_r in dx_r_ratios
+    for kr in kr_values
+        dx1 = dx_r * r1
+        @show dx1
+        omega = sqrt(kr * g / r1)
+        @show omega
+        grad_r, = Zygote.gradient(r2 -> added_mass_off_diagonal(r1,r2,omega ,dx1), r2)
+        @show grad_r
+        push!(data, (dx_r, kr, grad_r))
+    end
 end
-print(data)
-CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/more_12_heuristics_dx_DELhommeau_singleperturb.csv", data)
 
-cddc
-# # dx_r_ratios = collect(range(1.5, stop=20.5, step=0.5))
-# # kr_values = collect(range(0.5, stop=12.0, step=0.1))  # k*r dimensionless parameter
-# # data = DataFrame(dx_r_ratio=Float64[], kr=Float64[], grad_r = Float64[])
+CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/single_perturb_added_mass_data_dimensionless.csv", data)
 
-# # for dx_r in dx_r_ratios
-# #     for kr in kr_values
-# #         dx1 = dx_r * r
-# #         @show dx1
-# #         omega = sqrt(kr * g / r)
-# #         @show omega
-# #         grad_r, = Zygote.gradient(x -> added_mass_off_diagonal(1, x,omega, dx1), r)
-# #         @show grad_r
-# #         push!(data, (dx_r, kr, grad_r))
-# #     end
-# # end
+println("damping data")
+data = DataFrame(dx_r_ratio=Float64[], kr=Float64[], grad_r = Float64[])
 
-# # CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/added_mass_data_dimensionless.csv", data)
+for dx_r in dx_r_ratios
+    for kr in kr_values
+        dx1 = dx_r * r1
+        omega = sqrt(kr * g / r1)
+        grad_r, =  Zygote.gradient(r2 -> damping_off_diagonal(r1,r2,omega ,dx1), r2)
+        @show grad_r
+        push!(data, (dx_r, kr, grad_r))
+    end
+end
 
-# # println("damping data")
-# # data = DataFrame(dx_r_ratio=Float64[], kr=Float64[], grad_r = Float64[])
-
-# # for dx_r in dx_r_ratios
-# #     for kr in kr_values
-# #         dx1 = dx_r * r
-# #         omega = sqrt(kr * g / r)
-# #         grad_r, = Zygote.gradient(x -> damping_off_diagonal(x,omega ,dx1), r)
-# #         @show grad_r
-# #         push!(data, (dx_r, kr, grad_r))
-# #     end
-# # end
-
-# # CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/damping_data_dimensionless.csv", data)
+CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/single_perturb_damping_data_dimensionless.csv", data)

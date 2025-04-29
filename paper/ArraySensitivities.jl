@@ -72,8 +72,8 @@ omega = 1.03
 
 # CSV.write("/home/cornell/ForkMarineHydro/MarineHydro.jl/paper/Plots/11_heuristics_dx_DELhommeau.csv", data)
 
-dx_r_ratios = collect(range(1.5, stop=20.5, step=0.5))
-kr_values = collect(range(0.5, stop=12.0, step=0.1))  # k*r dimensionless parameter
+dx_r_ratios = collect(range(1.5, stop=20.5, step=0.1))
+kr_values = collect(range(0.1, stop=12.0, step=0.1))  # k*r dimensionless parameter
 data = DataFrame(dx_r_ratio=Float64[], kr=Float64[], grad_r = Float64[])
 
 for dx_r in dx_r_ratios

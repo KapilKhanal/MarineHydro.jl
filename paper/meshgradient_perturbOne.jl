@@ -29,7 +29,7 @@ function mesh_sizes(radius1,radius2,dx1)
 end
 
 
-h = 1e-3
+h = 1e-6
 
 ∂J_r1_fd(f,r1,r2,dx1; h=1e-5) = (f(r1+h,r2, dx1) .- f(r1-h,r2, dx1)) ./ (2*h)
 ∂J_dx1_fd(f, r1,r2, dx1; h=1e-2) = (f(r1,r2, dx1+h) .- f(r1,r2, dx1-h)) ./ (2*h)

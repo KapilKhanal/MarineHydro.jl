@@ -6,7 +6,7 @@ using Zygote
 using MarineHydro
 
 cpt = pyimport("capytaine")
-resolution = (14,14)
+resolution = (50,50)
 
 
 function cptMesh(radius)
