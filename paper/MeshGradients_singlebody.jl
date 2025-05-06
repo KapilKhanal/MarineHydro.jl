@@ -6,7 +6,7 @@ using Zygote
 using MarineHydro
 
 cpt = pyimport("capytaine")
-resolution = (50,50)
+resolution = (50,50) #required for mesh convergence over all omega.
 
 
 function cptMesh(radius)
