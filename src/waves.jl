@@ -8,8 +8,10 @@ function radiation_bc(mesh::Mesh, dof, omega)
 
     # Arguments
     - `mesh::Mesh`: The mesh of the floating body.
-    - `dof`: The degrees of freedom (assumed same for each panel).
-    - `omega`: The frequency of the incident ocean wave ~~~.
+    - `dof`: The degrees of freedom. Can be:
+             - A vector (e.g., [1,0,0]) - same DOF for all panels
+             - A matrix (nfaces × 3) - different DOF for each panel
+    - `omega`: The frequency of the incident ocean wave.
 
     # Returns
     - The (Neumann) radiation boundary condition values for each panel.

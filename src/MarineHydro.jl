@@ -32,4 +32,9 @@ export calculate_radiation_forces, integrate_pressure, DiffractionForce
 export FroudeKrylovForce, AiryBC, airy_waves_pressure, airy_waves_velocity,airy_waves_potential
 export radiation_bc, solve_hydro_coefficients 
 
+
+
+include("MultibodyComputation.jl")
+export FloatingBody, MultiBody, compute_multibody_radiation, compute_multibody_diffraction, DOF
+
 end
