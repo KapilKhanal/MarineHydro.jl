@@ -14,7 +14,12 @@ function radiation_bc(mesh::Mesh, dof, omega)
     # Returns
     - The (Neumann) radiation boundary condition values for each panel.
 """
-    return -1im .* omega .* sum(mesh.normals .* dof', dims=2)
+    nfaces = Int(mesh.nfaces)
+    d1 = dof[1]
+    d2 = dof[2]
+    d3 = dof[3]
+    scale = -1im * omega
+    return @inbounds [scale * (mesh.normals[i, 1] * d1 + mesh.normals[i, 2] * d2 + mesh.normals[i, 3] * d3) for i in 1:nfaces]
 end
 
 function integrate_pressure(mesh::Mesh, pressure, dof)
@@ -76,8 +81,9 @@ end
 
 function AiryBC(mesh,omega,beta=0)
     """Boundary condition for diffraction problem : the velocity on the floating body is the velocity of Airy wave field."""
-    bcs = -sum(airy_waves_velocity(mesh.centers,omega,beta) .* mesh.normals, dims = 2)
-    return bcs
+    velocity = airy_waves_velocity(mesh.centers, omega, beta)
+    nfaces = Int(mesh.nfaces)
+    return @inbounds [-(velocity[i, 1] * mesh.normals[i, 1] + velocity[i, 2] * mesh.normals[i, 2] + velocity[i, 3] * mesh.normals[i, 3]) for i in 1:nfaces]
 end
 
 function airy_waves_pressure(points, omega, beta=0)

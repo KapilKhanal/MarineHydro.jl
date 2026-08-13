@@ -89,7 +89,7 @@ const assemble_matrices = assemble_matrices_comprehension
 
 
 function assemble_matrix_wu(mesh, wavenumber; direct=true, all_normals=nothing)
-    return assemble_matrices([Rankine(), RankineReflected(), GFWu()], mesh, wavenumber; direct, all_normals)
+    return assemble_matrices((Rankine(), RankineReflected(), GFWu()), mesh, wavenumber; direct, all_normals)
 end
 
 
