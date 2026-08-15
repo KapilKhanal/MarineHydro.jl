@@ -25,12 +25,10 @@ end
 S, D = MarineHydro.assemble_matrices_comprehension(greens_functions, mesh, 1.0)
 S_, D_ = MarineHydro.assemble_matrices_broadcasting(greens_functions, mesh, 1.0)
 S__, D__ = MarineHydro.assemble_matrices_broadcasting(greens_functions, smesh, 1.0)
-@test S ≈ S_ ≈ S__
-@test D ≈ D_ ≈ D__
-
-# using CUDA
-# S_gpu, D_gpu = MarineHydro.assemble_matrices_(greens_functions, smesh, 1.0; arrtype=CuArray)
-# @test S__ ≈ Array(S_gpu)
-# @test D__ ≈ Array(D_gpu)
+elements = [element(smesh, i) for i in 1:smesh.nfaces]
+S_el, D_el = MarineHydro.assemble_matrices_broadcasting(greens_functions, elements, 1.0)
+S_sa, D_sa = assemble_matrices(greens_functions, smesh, 1.0)
+@test S ≈ S_ ≈ S__ ≈ S_el ≈ S_sa
+@test D ≈ D_ ≈ D__ ≈ D_el ≈ D_sa
 
 

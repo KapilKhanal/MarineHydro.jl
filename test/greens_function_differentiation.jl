@@ -1,9 +1,11 @@
 
 using Test
 using Zygote
+using ForwardDiff
 using MarineHydro
 using PyCall
 using LinearAlgebra
+using StaticArrays
 
 @testset "Greens Function Differentiability Tests" begin
     # Define elements
@@ -89,7 +91,101 @@ using LinearAlgebra
     end
 
     @testset "Rankine Integral Differentiability" begin
-        #add integral test sets
+        function panel_at(center)
+            return (
+                center=center,
+                vertices=[
+                    -0.5 -0.5 0.0;
+                     0.5 -0.5 0.0;
+                     0.5  0.5 0.0;
+                    -0.5  0.5 0.0
+                ] .+ center',
+                normal=[0.0, 0.0, 1.0],
+                radius=sqrt(2)/2,
+                area=1.0,
+            )
+        end
+
+        @testset "primal agreement $name" for (name, gf_old, gf_new) in (
+            ("Rankine", Rankine(), VRankine()),
+            ("RankineReflected", RankineReflected(), VRankineReflected()),
+        )
+            @test integral(gf_new, e1, e2) ≈ integral(gf_old, e1, e2) rtol=1e-4 atol=1e-6
+            @test collect(integral_gradient(gf_new, e1, e2; with_respect_to_first_variable=true)) ≈
+                  collect(integral_gradient(gf_old, e1, e2; with_respect_to_first_variable=true)) rtol=1e-4 atol=1e-6
+            @test collect(integral_gradient(gf_new, e1, e2; with_respect_to_first_variable=false)) ≈
+                  collect(integral_gradient(gf_old, e1, e2; with_respect_to_first_variable=false)) rtol=1e-4 atol=1e-6
+        end
+
+        @testset "$name first-order AD" for (name, gf) in (
+            ("Rankine", Rankine()),
+            ("VRankine", VRankine()),
+            ("RankineReflected", RankineReflected()),
+            ("VRankineReflected", VRankineReflected()),
+        )
+            integral_center1(center) = integral(gf, (center=center,), e2)
+            integral_center2(center) = integral(gf, e1, panel_at(center))
+
+            g_zygote1 = Zygote.gradient(integral_center1, e1.center)[1]
+            g_analytic1 = collect(integral_gradient(gf, e1, e2; with_respect_to_first_variable=true))
+            g_fd1 = ForwardDiff.gradient(integral_center1, e1.center)
+            @test g_zygote1 ≈ g_analytic1 rtol=1e-6 atol=1e-8
+            @test g_zygote1 ≈ g_fd1 rtol=1e-5 atol=1e-7
+            @test !any(isnan, g_zygote1)
+
+            g_zygote2 = Zygote.gradient(integral_center2, e2.center)[1]
+            g_analytic2 = collect(integral_gradient(gf, e1, e2; with_respect_to_first_variable=false))
+            g_fd2 = ForwardDiff.gradient(integral_center2, e2.center)
+            @test g_zygote2 ≈ g_analytic2 rtol=1e-5 atol=1e-6
+            @test g_zygote2 ≈ g_fd2 rtol=1e-5 atol=1e-6
+            @test !any(isnan, g_zygote2)
+        end
+
+        @testset "Rankine vs VRankine Zygote agreement" begin
+            for (gf_old, gf_new) in ((Rankine(), VRankine()), (RankineReflected(), VRankineReflected()))
+                g_old1 = Zygote.gradient(c -> integral(gf_old, (center=c,), e2), e1.center)[1]
+                g_new1 = Zygote.gradient(c -> integral(gf_new, (center=c,), e2), e1.center)[1]
+                @test g_old1 ≈ g_new1 rtol=1e-4 atol=1e-6
+
+                g_old2 = Zygote.gradient(c -> integral(gf_old, e1, panel_at(c)), e2.center)[1]
+                g_new2 = Zygote.gradient(c -> integral(gf_new, e1, panel_at(c)), e2.center)[1]
+                @test g_old2 ≈ g_new2 rtol=1e-4 atol=1e-6
+            end
+        end
+
+        @testset "$name second-order AD" for (name, gf) in (
+            ("Rankine", Rankine()),
+            ("VRankine", VRankine()),
+        )
+            grad_center1(center) = collect(integral_gradient(gf, (center=center,), e2; with_respect_to_first_variable=true))
+            J_zygote = Zygote.jacobian(grad_center1, e1.center)[1]
+            J_fd = ForwardDiff.jacobian(grad_center1, e1.center)
+            H_fd = ForwardDiff.hessian(c -> integral(gf, (center=c,), e2), e1.center)
+            @test J_zygote ≈ J_fd rtol=1e-5 atol=1e-7
+            @test J_zygote ≈ H_fd rtol=1e-5 atol=1e-7
+            @test !any(isnan, J_zygote)
+        end
+
+        @testset "Rankine vs VRankine Hessian agreement" begin
+            J_old = Zygote.jacobian(c -> collect(integral_gradient(Rankine(), (center=c,), e2; with_respect_to_first_variable=true)), e1.center)[1]
+            J_new = Zygote.jacobian(c -> collect(integral_gradient(VRankine(), (center=c,), e2; with_respect_to_first_variable=true)), e1.center)[1]
+            @test J_old ≈ J_new rtol=1e-4 atol=1e-6
+        end
+
+        @testset "VRankine ChainRules use analytic Birk derivatives" begin
+            Tmat, qgc, local_corners, _ = MarineHydro.birk_panel_geometry(e2.vertices)
+            p = Tmat' * (SVector{3}(e1.center) - SVector{3}(qgc))
+            x, y, z = p[1], p[2], p[3]
+            v = MarineHydro.velocity_derivatives(x, y, z, local_corners)
+            H = MarineHydro.velocity_hessian(x, y, z, local_corners)
+
+            gφ = Zygote.gradient((a, b, c) -> MarineHydro.velocity_potential(a, b, c, local_corners), x, y, z)
+            @test [gφ[1], gφ[2], gφ[3]] ≈ collect(v) atol=1e-12
+
+            Jv = Zygote.jacobian(q -> MarineHydro.velocity_derivatives(q[1], q[2], q[3], local_corners), [x, y, z])[1]
+            @test Jv ≈ collect(H) atol=1e-12
+            @test Jv ≈ ForwardDiff.jacobian(q -> MarineHydro.velocity_derivatives(q[1], q[2], q[3], local_corners), [x, y, z]) rtol=1e-8
+        end
     end
 
     @testset "GFWu Differentiability" for k in [0.1, 1.0, 10.0]

@@ -52,20 +52,74 @@ function assemble_matrices_explicit_both(green_functions, mesh, wavenumber; dire
 end
 
 function assemble_matrices_broadcasting(greens_functions, mesh, wavenumber; direct=true, arrtype=Array)
-    # Another variant, that works with e.g. CuArray
+    # Broadcasting variant: `arrtype=CuArray` (or another GPU array type) uploads
+    # isbits StaticElements and compiles the Green's kernels as a GPU broadcast.
     elements = arrtype([element(mesh, i) for i in 1:mesh.nfaces])
-    co_elements = reshape(elements, (1, length(elements)))  # Same but as a (1, n) row vector
-    S(e1, e2) = integral(greens_functions, e1, e2, wavenumber)
-    S_matrix = -1/(4π) * S.(elements, co_elements)
+    return assemble_matrices_broadcasting(greens_functions, elements, wavenumber; direct)
+end
+
+# Autodispatch when the caller already holds a GPU (or other) vector of elements.
+function assemble_matrices_broadcasting(greens_functions, elements::AbstractVector, wavenumber; direct=true)
+    co_elements = reshape(elements, (1, length(elements)))
+    S_kernel(e1, e2) = integral(greens_functions, e1, e2, wavenumber)
+    S_matrix = (-1 / 4π) .* S_kernel.(elements, co_elements)
 
     if direct
-        D(e1, e2) = MarineHydro.normal(e2)' * integral_gradient(greens_functions, e1, e2, wavenumber, with_respect_to_first_variable=false)
-        D_matrix = -1/(4π) * D.(elements, co_elements)
-        return S_matrix, D_matrix + arrtype(0.5 .* I(mesh.nfaces))
+        D_kernel(e1, e2) = normal(e2)' * integral_gradient(greens_functions, e1, e2, wavenumber; with_respect_to_first_variable=false)
+        D_matrix = (-1 / 4π) .* D_kernel.(elements, co_elements)
     else
-        K(e1, e2) = MarineHydro.normal(e1)' * integral_gradient(greens_functions, e1, e2, wavenumber, with_respect_to_first_variable=true)
-        K_matrix = -1/(4π) * K.(elements, co_elements)
-        return S_matrix, K_matrix + arrtype(0.5 .* I(mesh.nfaces))
+        K_kernel(e1, e2) = normal(e1)' * integral_gradient(greens_functions, e1, e2, wavenumber; with_respect_to_first_variable=true)
+        D_matrix = (-1 / 4π) .* K_kernel.(elements, co_elements)
+    end
+    T = eltype(D_matrix)
+    return S_matrix, D_matrix + T(0.5) * one(D_matrix)
+end
+
+# Vendor-agnostic panel-panel assembly. `get_backend(elements)` selects CPU,
+# CUDA, Metal, ROC, or the JLArrays dummy GPU from the array type.
+@kernel function _assemble_S_D!(S, D, @Const(elements), wavenumber, gfs, direct)
+    i, j = @index(Global, NTuple)
+    @inbounds begin
+        e1 = elements[i]
+        e2 = elements[j]
+        S[i, j] = -(1 / 4π) * integral(gfs, e1, e2, wavenumber)
+        if direct
+            n = normal(e2)
+            grad = integral_gradient(gfs, e1, e2, wavenumber; with_respect_to_first_variable=false)
+        else
+            n = normal(e1)
+            grad = integral_gradient(gfs, e1, e2, wavenumber; with_respect_to_first_variable=true)
+        end
+        D[i, j] = -(1 / 4π) * (n' * grad)
+        if i == j
+            D[i, j] += convert(eltype(D), 0.5)
+        end
+    end
+end
+
+function assemble_matrices_ka(greens_functions, mesh, wavenumber; direct=true, arrtype=Array)
+    elements = arrtype([element(mesh, i) for i in 1:mesh.nfaces])
+    return assemble_matrices_ka(greens_functions, elements, wavenumber; direct)
+end
+
+function assemble_matrices_ka(greens_functions, elements::AbstractVector, wavenumber; direct=true)
+    backend = KernelAbstractions.get_backend(elements)
+    n = length(elements)
+    RT = typeof(float(real(wavenumber)))
+    T = Complex{RT}
+    S = KernelAbstractions.zeros(backend, T, n, n)
+    D = KernelAbstractions.zeros(backend, T, n, n)
+    kernel = _assemble_S_D!(backend)
+    kernel(S, D, elements, wavenumber, greens_functions, direct; ndrange=(n, n))
+    _ka_synchronize(backend)
+    return S, D
+end
+
+function _ka_synchronize(backend)
+    try
+        KernelAbstractions.synchronize(backend)
+    catch e
+        (e isa MethodError) || rethrow()
     end
 end
 
@@ -84,8 +138,18 @@ Assembles the influence matrices based on the tuple of provided Green's function
 # Returns
 - A tuple of assembled matrices. S and (D or K) depending on the flag.
 """
-# The default method:
-const assemble_matrices = assemble_matrices_comprehension
+# Default: comprehension is Zygote-friendly on dense `Mesh`.
+# `StaticArraysMesh` uses broadcasting so `arrtype=CuArray` (or a `CuArray` of
+# elements) autodispatches to the GPU path.
+assemble_matrices(green_functions, mesh, wavenumber; kwargs...) =
+    assemble_matrices_comprehension(green_functions, mesh, wavenumber; kwargs...)
+
+function assemble_matrices(green_functions, mesh::StaticArraysMesh, wavenumber; direct=true, arrtype=Array, all_normals=nothing)
+    if !isnothing(all_normals)
+        error("all_normals is not supported on the broadcasting / GPU assembly path; use a dense Mesh.")
+    end
+    return assemble_matrices_broadcasting(green_functions, mesh, wavenumber; direct, arrtype)
+end
 
 
 function assemble_matrix_wu(mesh, wavenumber; direct=true, all_normals=nothing)
@@ -93,19 +157,47 @@ function assemble_matrix_wu(mesh, wavenumber; direct=true, all_normals=nothing)
 end
 
 
+# ImplicitAD is CPU / Zygote oriented. Dual numbers and GPU arrays (CuArray, …)
+# use native `\` (cuSOLVER on CUDA). GPU reverse-mode goes through `gpu_linsolve`.
 function linsolve(A, b)
-    # check to see is dual numbers are used
-    is_ad = eltype(real(A))<: ForwardDiff.Dual
-    if is_ad
-        # Use if ForwardDiff is being used
+    if eltype(real(A)) <: ForwardDiff.Dual
         return A \ b
-    else
-        # Otherwise, use ImplicitAD version (works with Zygote). 
-        # This gives incorrect gradients if used with Dual inputs, 
-        # but this if statemnt should prevent this from being used 
-        # in that case.
+    elseif A isa Array
         return implicit_linear(A, b)
+    else
+        return gpu_linsolve(A, b)
     end
+end
+
+gpu_linsolve(A, b) = _backend_ldiv(A, b)
+
+# Prefer native `\` (cuSOLVER). Dummy GPU arrays (JLArray) and some Metal
+# types hit generic LAPACK via scalar indexing, so factorize on the host.
+function _backend_ldiv(A, b)
+    if A isa Array || _uses_device_ldiv(A)
+        return A \ b
+    end
+    x = Array(A) \ Array(b)
+    out = similar(b, eltype(x), size(x))
+    copyto!(out, x)
+    return out
+end
+
+function _uses_device_ldiv(A)
+    return string(nameof(typeof(A))) == "CuArray"
+end
+
+function ChainRulesCore.rrule(::typeof(gpu_linsolve), A, b)
+    x = _backend_ldiv(A, b)
+    function gpu_linsolve_pullback(ȳ)
+        ȳu = unthunk(ȳ)
+        if ȳu isa AbstractZero
+            return (NoTangent(), ZeroTangent(), ZeroTangent())
+        end
+        λ = _backend_ldiv(A', ȳu)
+        return (NoTangent(), -λ * x', λ)
+    end
+    return x, gpu_linsolve_pullback
 end
 
 
