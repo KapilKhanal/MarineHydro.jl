@@ -5,37 +5,32 @@ using DimensionalData
 # Abstract type named LinearPotentialFlowProblem. The diffraction and radiation problems will be subtypes of this type. 
 abstract type LinearPotentialFlowProblem end
 
+_problem_scalar_type(vals...) = promote_type(map(typeof, vals)...)
+
 # Define DiffractionProblem struct as a subtype of LinearPotentialFlowProblem
-struct DiffractionProblem <: LinearPotentialFlowProblem
+struct DiffractionProblem{T} <: LinearPotentialFlowProblem
     floatingbody::FloatingBody
-    omega::Real
-    beta::Real
-    wavenumber::Real
-    encountered_omega::Real
-    encountered_beta::Real
-    encountered_wavenumber::Real
-    forward_speed::Real
+    omega::T
+    beta::T
+    wavenumber::T
+    encountered_omega::T
+    encountered_beta::T
+    encountered_wavenumber::T
+    forward_speed::T
     influenced_dofs::Vector{Symbol}
     function DiffractionProblem(floatingbody::FloatingBody,
-        omega::Real,
-        beta::Real,
-        wavenumber::Real,
-        encountered_omega::Real,
-        encountered_beta::Real,
-        encountered_wavenumber::Real,
-        forward_speed::Real,
-        influenced_dofs::Vector{Symbol})
+        omega, beta, wavenumber,
+        encountered_omega, encountered_beta, encountered_wavenumber,
+        forward_speed, influenced_dofs::Vector{Symbol})
         @assert influenced_dofs ⊆ keys(floatingbody.dofs) "the influenced_dofs Symbols must be a key of floatingbody.dof"
-        return new(floatingbody, omega, beta, wavenumber, encountered_omega, encountered_beta, encountered_wavenumber, forward_speed, influenced_dofs)
+        T = _problem_scalar_type(omega, beta, wavenumber, encountered_omega, encountered_beta, encountered_wavenumber, forward_speed)
+        return new{T}(floatingbody, T(omega), T(beta), T(wavenumber),
+            T(encountered_omega), T(encountered_beta), T(encountered_wavenumber), T(forward_speed), influenced_dofs)
     end
 end
 
 function DiffractionProblem(floatingbody::FloatingBody,
-    omega::Real,
-    beta::Real,
-    wavenumber::Real,
-    forward_speed::Real,
-    influenced_dofs::Vector{Symbol})
+    omega, beta, wavenumber, forward_speed, influenced_dofs::Vector{Symbol})
     if forward_speed==0
         return DiffractionProblem(floatingbody,omega,beta,wavenumber,omega,beta,wavenumber,forward_speed,influenced_dofs)
     else
@@ -46,41 +41,36 @@ end
 
 
 # Define RadiationProblem struct as a subtype of LinearPotentialFlowProblem
-struct RadiationProblem <: LinearPotentialFlowProblem
+struct RadiationProblem{T} <: LinearPotentialFlowProblem
     floatingbody::FloatingBody
-    omega::Real
-    beta::Union{Real, Nothing}
-    wavenumber::Real
-    encountered_omega::Real
-    encountered_beta::Union{Real, Nothing}
-    encountered_wavenumber::Real
-    forward_speed::Real
+    omega::T
+    beta::Union{T, Nothing}
+    wavenumber::T
+    encountered_omega::T
+    encountered_beta::Union{T, Nothing}
+    encountered_wavenumber::T
+    forward_speed::T
     radiating_dof::Symbol
     influenced_dofs::Vector{Symbol}
     function RadiationProblem(floatingbody::FloatingBody,
-        omega::Real,
-        beta::Union{Real, Nothing},
-        wavenumber::Real,
-        encountered_omega::Real,
-        encountered_beta::Union{Real, Nothing},
-        encountered_wavenumber::Real,
-        forward_speed::Real,
-        radiating_dof::Symbol,
-        influenced_dofs::Vector{Symbol})
+        omega, beta, wavenumber,
+        encountered_omega, encountered_beta, encountered_wavenumber,
+        forward_speed, radiating_dof::Symbol, influenced_dofs::Vector{Symbol})
         @assert (radiating_dof in keys(floatingbody.dofs)) "the radiating_dof Symbol must be a key of floatingbody.dof"
         @assert influenced_dofs ⊆ keys(floatingbody.dofs) "the influenced_dofs Symbols must be a key of floatingbody.dof"
-        return new(floatingbody, omega, beta, wavenumber, encountered_omega, encountered_beta, encountered_wavenumber, forward_speed, radiating_dof, influenced_dofs)
+        scalars = (omega, wavenumber, encountered_omega, encountered_wavenumber, forward_speed)
+        beta_vals = filter(!isnothing, (beta, encountered_beta))
+        T = _problem_scalar_type(scalars..., beta_vals...)
+        β = isnothing(beta) ? nothing : T(beta)
+        βe = isnothing(encountered_beta) ? nothing : T(encountered_beta)
+        return new{T}(floatingbody, T(omega), β, T(wavenumber),
+            T(encountered_omega), βe, T(encountered_wavenumber), T(forward_speed), radiating_dof, influenced_dofs)
     end
 end
 
 
 function RadiationProblem(floatingbody::FloatingBody,
-    omega::Real,
-    beta::Union{Real, Nothing},
-    wavenumber::Real,
-    forward_speed::Real,
-    radiating_dof::Symbol,
-    influenced_dofs::Vector{Symbol})
+    omega, beta, wavenumber, forward_speed, radiating_dof::Symbol, influenced_dofs::Vector{Symbol})
     if forward_speed==0
         return RadiationProblem(floatingbody, omega, beta, wavenumber, omega, beta, wavenumber, forward_speed, radiating_dof, influenced_dofs)
     else
@@ -93,21 +83,13 @@ end
 
 abstract type LinearPotentialFlowResult end
 
-struct DiffractionResult <: LinearPotentialFlowResult
-    problem::DiffractionProblem
+struct DiffractionResult{P<:DiffractionProblem} <: LinearPotentialFlowResult
+    problem::P
     forces::NamedTuple
-    function DiffractionResult(problem::DiffractionProblem,
-        forces::NamedTuple)
-        return new(problem, forces)
-    end
 end
-struct RadiationResult <: LinearPotentialFlowResult
-    problem::RadiationProblem
+struct RadiationResult{P<:RadiationProblem} <: LinearPotentialFlowResult
+    problem::P
     forces::NamedTuple
-    function RadiationResult(problem::RadiationProblem,
-        forces::NamedTuple)
-        return new(problem, forces)
-    end
 end
 
 # Convert problem and forces for that problem into a results struct
@@ -143,7 +125,7 @@ function problems_from_data(parameters::NamedTuple, floatingbody::FloatingBody)
                 omega in parameters[:wave_frequencies],
                 forward_speed in forward_speeds])
     else
-        diffraction_problems = LinearPotentialFlowProblem[]
+        diffraction_problems = DiffractionProblem[]
     end
 
     # There is at least one radiation problem to solve
@@ -165,9 +147,11 @@ function problems_from_data(parameters::NamedTuple, floatingbody::FloatingBody)
         
         
     else
-        radiation_problems = LinearPotentialFlowProblem[]
+        radiation_problems = RadiationProblem[]
     end
 
+    isempty(diffraction_problems) && return radiation_problems
+    isempty(radiation_problems) && return diffraction_problems
     return vcat(diffraction_problems, radiation_problems)
 end
 
@@ -350,16 +334,16 @@ end
 
 # Compute NamedTuple of of results (with keys added_mass, ...)
 # This is differentiable
-function compute_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody; direct::Bool=true, gf::String="Wu")
+function compute_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody; direct::Bool=true, gf::String="Wu", greens_functions=nothing)
     problems = problems_from_data(parameters, floatingbody)
-    results = solve_all_problems(problems; direct=direct, gf=gf)
+    results = solve_all_problems(problems; direct=direct, gf=gf, greens_functions=greens_functions)
     data = assemble_hydrodynamic_coefficients(parameters, floatingbody, results)
     return data
 end
 
 # This is NOT differentiable (as is) due to DimStack 
-function compute_and_label_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody; direct::Bool=true, gf::String="Wu")
-    data = compute_hydrodynamic_coefficients(parameters, floatingbody; direct=direct, gf=gf)
+function compute_and_label_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody; direct::Bool=true, gf::String="Wu", greens_functions=nothing)
+    data = compute_hydrodynamic_coefficients(parameters, floatingbody; direct=direct, gf=gf, greens_functions=greens_functions)
     DimStack_of_data = create_DimStack(data, parameters, floatingbody)
     return DimStack_of_data
 end

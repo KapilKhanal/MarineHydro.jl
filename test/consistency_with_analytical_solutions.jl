@@ -18,15 +18,21 @@ mesh = Mesh(cptmesh)
     B_heave = [0.1036, 0.1816, 0.2793, 0.3254, 0.3410, 0.3391, 0.3271, 0.3098, 0.2899, 0.2691, 0.2484, 0.2096, 0.1756, 0.1469, 0.1229, 0.1031, 0.0674, 0.0452, 0.0219, 0.0116, 0.0066, 0.0040, 0.0026, 0.0017, 0.0012]
 
     rho = 1000
-    ω = sqrt.(K_heave .* 9.8)
-    heave = [0.0, 0.0, 1.0]
-    results_vec = [calculate_radiation_forces(mesh,heave,omega) for omega in ω]
-    A_bem = [results[1]./((2/3)*pi*radius*rho)  for results in results_vec]
-    @test A_bem ≈ A_heave  rtol=1e-1
-    B_bem = [results[2]./((2/3)*pi*radius*rho)  for results in results_vec]
-    ##dimensional for heave and damping(requires /wn)
-    B_bem = B_bem./ω
-    @test B_bem ≈ B_heave  rtol=1e-1
+    old_rho = SETTINGS.rho
+    set_rho!(rho)
+    try
+        ω = sqrt.(K_heave .* 9.8)
+        heave = [0.0, 0.0, 1.0]
+        results_vec = [calculate_radiation_forces(mesh,heave,omega) for omega in ω]
+        A_bem = [results[1]./((2/3)*pi*radius*rho)  for results in results_vec]
+        @test A_bem ≈ A_heave  rtol=1e-1
+        B_bem = [results[2]./((2/3)*pi*radius*rho)  for results in results_vec]
+        ##dimensional for heave and damping(requires /wn)
+        B_bem = B_bem./ω
+        @test B_bem ≈ B_heave  rtol=1e-1
+    finally
+        set_rho!(old_rho)
+    end
 end
 
 
@@ -39,16 +45,24 @@ end
     B_heave = [0.1036, 0.1816, 0.2793, 0.3254, 0.3410, 0.3391, 0.3271, 0.3098, 0.2899, 0.2691, 0.2484, 0.2096, 0.1756, 0.1469, 0.1229, 0.1031, 0.0674, 0.0452, 0.0219, 0.0116, 0.0066, 0.0040, 0.0026, 0.0017, 0.0012]
 
     rho = 1025
-    SETTINGS.rho = rho
-    ω = sqrt.(K_heave .* 9.8)
-    heave = [0.0, 0.0, 1.0]
-    results_vec = [calculate_radiation_forces(mesh,heave,omega) for omega in ω]
-    A_bem = [results[1]./((2/3)*pi*radius*rho)  for results in results_vec]
-    @test A_bem ≈ A_heave  rtol=1e-1
-    B_bem = [results[2]./((2/3)*pi*radius*rho)  for results in results_vec]
-    ##dimensional for heave and damping(requires /wn)
-    B_bem = B_bem./ω
-    @test B_bem ≈ B_heave  rtol=1e-1
+    old_rho = SETTINGS.rho
+    set_rho!(rho)
+    try
+        ω = sqrt.(K_heave .* 9.8)
+        heave = [0.0, 0.0, 1.0]
+        results_vec = [calculate_radiation_forces(mesh,heave,omega) for omega in ω]
+        A_bem = [results[1]./((2/3)*pi*radius*rho)  for results in results_vec]
+        @test A_bem ≈ A_heave  rtol=1e-1
+        B_bem = [results[2]./((2/3)*pi*radius*rho)  for results in results_vec]
+        ##dimensional for heave and damping(requires /wn)
+        B_bem = B_bem./ω
+        @test B_bem ≈ B_heave  rtol=1e-1
+    finally
+        set_rho!(old_rho)
+    end
+end
 
+@testset "SETTINGS.rho is restored after analytical tests" begin
+    @test SETTINGS.rho == 1000.0
 end
 

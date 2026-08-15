@@ -165,15 +165,19 @@ function combine_floatingbodies(floatingbodylist::Vector{FloatingBody},new_body_
         for dof_name in keys(dofs)
             new_dof_key = Symbol(join([body_name,dof_name],"__"))
             dof_mat = dofs[dof_name]
-            new_dof_mat = zeros(tot_num_faces,3)
-            new_dof_mat[nbf+1:nbf+length(dof_mat[:,1]),:] = dof_mat  
+            n_after = tot_num_faces - nbf - size(dof_mat, 1)
+            new_dof_mat = vcat(zeros(nbf, 3), dof_mat, zeros(n_after, 3))
             push!(new_dof_keys,new_dof_key)
             push!(new_dof_mats,new_dof_mat)        
         end
     end
     new_dofs = NamedTuple{tuple(new_dof_keys...)}(tuple(new_dof_mats...))
 
-    return FloatingBody(new_mesh,new_dofs,new_body_name)
+    lids = [fb.lid_mesh for fb in floatingbodylist]
+    present_lids = Mesh[m for m in lids if !isnothing(m)]
+    new_lid = isempty(present_lids) ? nothing : combine_meshes(present_lids)
+
+    return FloatingBody(new_mesh, new_lid, new_dofs, new_body_name)
 end
 
 function combine_floatingbodies(floatingbodylist::Vector{FloatingBody})

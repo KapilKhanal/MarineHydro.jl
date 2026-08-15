@@ -18,13 +18,18 @@ export SETTINGS, set_g!, set_rho!
 include("green_functions/abstract_greens_function.jl")
 export greens, gradient_greens, integral, integral_gradient, with_reduced_coordinates
 include("green_functions/rankine.jl")
+export DelhommeauRankine
+include("green_functions/rankine_vectorized.jl")
 export Rankine
 include("green_functions/rankine_reflected.jl")
-export RankineReflected
-include("green_functions/rankine_vectorized.jl")
-export VRankine, VRankineReflected
+export RankineReflected, DelhommeauRankineReflected
 include("green_functions/rankine_reflected_negative.jl")
-export RankineReflectedNegative
+export RankineReflectedNegative, DelhommeauRankineReflectedNegative
+
+# Temporary aliases: VRankine is now Rankine.
+Base.@deprecate_binding VRankine Rankine
+Base.@deprecate_binding VRankineReflected RankineReflected
+export VRankine, VRankineReflected
 include("green_functions/wu.jl")
 export GFWu
 include("green_functions/exact_Guevel_Delhommeau.jl")

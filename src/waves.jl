@@ -14,7 +14,7 @@ function radiation_bc(mesh::Mesh, dof, omega)
     # Returns
     - The (Neumann) radiation boundary condition values for each panel.
 """
-    nfaces = Int(mesh.nfaces)
+    nfaces = mesh.nfaces
     d1 = dof[1]
     d2 = dof[2]
     d3 = dof[3]
@@ -109,11 +109,11 @@ end
 
 # New functions
 
-function compute_wavenumber(omega::Real)
+function compute_wavenumber(omega)
     return omega^2 / SETTINGS.g
 end
 
-function compute_encountered_values(omega::Real, beta::Real, forward_speed::Real)
+function compute_encountered_values(omega, beta, forward_speed)
     k = compute_wavenumber(omega)    
     if forward_speed==0
         return omega, k, beta
@@ -161,7 +161,7 @@ function radiation_bc(problem::RadiationProblem)
     if problem.forward_speed!=0
         ddofdx = evaluate_gradient_of_motion(problem.floatingbody.mesh, string(problem.radiating_dof))
         ddofdx_dot_n = sum(ddofdx .* problem.floatingbody.mesh.normals, dims=2)
-        bc .+= problem.forward_speed .* ddofdx_dot_n
+        bc = bc .+ problem.forward_speed .* ddofdx_dot_n
     end
     return bc
 end

@@ -5,13 +5,21 @@
 # Birk defines the Rankine source as φ = -1/(4πr) and evaluates potential/velocity
 # in a panel-local frame (sections 2–4), then transforms vectors back with T.
 # MarineHydro / Capytaine use G = 1/r; matrix assembly later multiplies by -1/(4π).
-# The conversion used by VRankine is therefore
+# The conversion used by Rankine is therefore
 #   ∫ G dS      = -4π φ_Birk
 #   ∇_{x} ∫ G dS = -4π v_Birk
 # where x is the field point (element_1).
 
-struct VRankine <: GreensFunction end
-struct VRankineReflected <: GreensFunction end
+"""
+    Rankine()
+
+Default Rankine source: Birk (2021) vectorized constant-source panel.
+
+Point-source `greens` / `gradient_greens` are the same `1/r` kernel as
+`DelhommeauRankine`. Panel integrals use the Birk local-frame formulas.
+"""
+struct Rankine <: GreensFunction end
+wavenumber_independent(::Rankine) = true
 
 const _BIRK_ZTOL = 1e-14
 const _BIRK_DKTOL = 1e-14
@@ -263,48 +271,44 @@ function ChainRulesCore.rrule(::typeof(velocity_derivatives), x, y, z, local_cor
     return v, velocity_derivatives_pullback
 end
 
-function _vrankine_integral_and_gradient(element_1, element_2)
-    point = center(element_1)
-    source_point = center(element_2)
-    source_radius = radius(element_2)
-    source_area = area(element_2)
+# Source-panel frame is independent of the field point: assemble once per column.
+@inline function _vrankine_from_geom(point, source_point, source_radius, source_area, Tmat, qgc, local_corners)
     r̄ = point - source_point
     r = norm(r̄)
     if r > 7 * source_radius
-        # Same far-field kernel as Rankine: ∫ G dS ≈ A/r and ∇_{x2} ∫ G ≈ (x1-x2) A / r^3.
         return source_area / r, (r̄ / r^3) * source_area
     end
-
-    Tmat, qgc, local_corners, _area = birk_panel_geometry(vertices(element_2))
     PT = eltype(point)
     QT = eltype(qgc)
     field_local = Tmat' * (SVector{3,PT}(point[1], point[2], point[3]) - SVector{3,QT}(qgc[1], qgc[2], qgc[3]))
     φ_birk = velocity_potential(field_local[1], field_local[2], field_local[3], local_corners)
     v_local = velocity_derivatives(field_local[1], field_local[2], field_local[3], local_corners)
     v_global = Tmat * v_local
-    # Convert Birk (φ = -1/(4πr)) to MarineHydro (G = 1/r).
     φ = -4π * φ_birk
-    grad_wrt_field = -4π .* v_global   # ∇_{x1} ∫ G dS
-    # Rankine far/near API stores the gradient-with-respect-to-second-variable
-    # as the default `integral_gradient` value (see rankine.jl).
-    grad_wrt_source = -grad_wrt_field
+    grad_wrt_source = 4π .* v_global
     return φ, grad_wrt_source
 end
 
-function greens(::VRankine, element_1, element_2, wavenumber=nothing)
-    return greens(Rankine(), element_1, element_2, wavenumber)
+function _vrankine_integral_and_gradient(element_1, element_2)
+    Tmat, qgc, local_corners, _area = birk_panel_geometry(vertices(element_2))
+    return _vrankine_from_geom(center(element_1), center(element_2), radius(element_2),
+        area(element_2), Tmat, qgc, local_corners)
 end
 
-function gradient_greens(::VRankine, element_1, element_2, wavenumber=nothing; with_respect_to_first_variable=false)
-    return gradient_greens(Rankine(), element_1, element_2, wavenumber; with_respect_to_first_variable)
+function greens(::Rankine, element_1, element_2, wavenumber=nothing)
+    return greens(DelhommeauRankine(), element_1, element_2, wavenumber)
 end
 
-function integral(::VRankine, element_1, element_2, wavenumber=nothing)
+function gradient_greens(::Rankine, element_1, element_2, wavenumber=nothing; with_respect_to_first_variable=false)
+    return gradient_greens(DelhommeauRankine(), element_1, element_2, wavenumber; with_respect_to_first_variable)
+end
+
+function integral(::Rankine, element_1, element_2, wavenumber=nothing)
     φ, _ = _vrankine_integral_and_gradient(element_1, element_2)
     return φ
 end
 
-function integral_gradient(::VRankine, element_1, element_2, wavenumber=nothing; with_respect_to_first_variable=false)
+function integral_gradient(::Rankine, element_1, element_2, wavenumber=nothing; with_respect_to_first_variable=false)
     _, grad_wrt_source = _vrankine_integral_and_gradient(element_1, element_2)
     point = center(element_1)
     if with_respect_to_first_variable
@@ -314,46 +318,12 @@ function integral_gradient(::VRankine, element_1, element_2, wavenumber=nothing;
     end
 end
 
-function both_integral_and_integral_gradient(::VRankine, element_1, element_2, wavenumber=nothing; with_respect_to_first_variable=false)
+function both_integral_and_integral_gradient(::Rankine, element_1, element_2, wavenumber=nothing; with_respect_to_first_variable=false)
     φ, grad_wrt_source = _vrankine_integral_and_gradient(element_1, element_2)
     point = center(element_1)
     if with_respect_to_first_variable
         return φ, _as_center_type(point, -grad_wrt_source)
     else
         return φ, _as_center_type(point, grad_wrt_source)
-    end
-end
-
-function greens(::VRankineReflected, element_1, element_2, wavenumber=nothing)
-    return greens(VRankine(), free_surface_symmetry(element_1), element_2)
-end
-
-function gradient_greens(::VRankineReflected, element_1, element_2, wavenumber=nothing; with_respect_to_first_variable=false)
-    if with_respect_to_first_variable
-        return gradient_greens(VRankine(), element_1, free_surface_symmetry(element_2); with_respect_to_first_variable)
-    else
-        return gradient_greens(VRankine(), free_surface_symmetry(element_1), element_2; with_respect_to_first_variable)
-    end
-end
-
-function integral(::VRankineReflected, element_1, element_2, wavenumber=nothing)
-    return integral(VRankine(), free_surface_symmetry(element_1), element_2)
-end
-
-function integral_gradient(::VRankineReflected, element_1, element_2, wavenumber=nothing; with_respect_to_first_variable=false)
-    ng = integral_gradient(VRankine(), free_surface_symmetry(element_1), element_2; with_respect_to_first_variable)
-    if with_respect_to_first_variable
-        return vertical_reflection(ng)
-    else
-        return ng
-    end
-end
-
-function both_integral_and_integral_gradient(::VRankineReflected, element_1, element_2, wavenumber=nothing; with_respect_to_first_variable=false)
-    g, ng = both_integral_and_integral_gradient(VRankine(), free_surface_symmetry(element_1), element_2; with_respect_to_first_variable)
-    if with_respect_to_first_variable
-        return g, vertical_reflection(ng)
-    else
-        return g, ng
     end
 end

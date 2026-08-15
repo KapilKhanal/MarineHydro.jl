@@ -110,11 +110,11 @@ function run_backend_tests(arrtype, label)
     k = 1.0
     ω = 1.0
     gfs_wu = (Rankine(), RankineReflected(), GFWu())
-    gfs_v = (VRankine(), VRankineReflected(), GFWu())
+    gfs_del = (DelhommeauRankine(), DelhommeauRankineReflected(), GFWu())
     e1, e2 = static_element_pair()
 
     @testset "$label broadcasting vs CPU" begin
-        for (gfs, gflabel) in ((gfs_wu, "Wu"), (gfs_v, "VRankine"))
+        for (gfs, gflabel) in ((gfs_wu, "Wu"), (gfs_del, "DelhommeauRankine"))
             @testset "$gflabel" begin
                 S, D = MH.assemble_matrices_broadcasting(gfs, smesh, k)
                 S_gpu, D_gpu = MH.assemble_matrices_broadcasting(gfs, smesh, k; arrtype)
@@ -158,8 +158,8 @@ function run_backend_tests(arrtype, label)
             Rankine(),
             RankineReflected(),
             GFWu(),
-            VRankine(),
-            VRankineReflected(),
+            DelhommeauRankine(),
+            DelhommeauRankineReflected(),
         )
         for gf in gpu_gfs
             let gf = gf
@@ -264,7 +264,7 @@ function run_backend_tests(arrtype, label)
     end
 
     @testset "$label end-to-end radiation-style" begin
-        for (gfs, gflabel) in ((gfs_wu, "Wu"), (gfs_v, "VRankine"))
+        for (gfs, gflabel) in ((gfs_wu, "Wu"), (gfs_del, "DelhommeauRankine"))
             @testset "$gflabel" begin
                 bc = radiation_style_bc(smesh, ω)
                 S, D = MH.assemble_matrices_broadcasting(gfs, smesh, k)

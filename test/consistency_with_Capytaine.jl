@@ -16,7 +16,7 @@ cpt_mesh_two_spheres = (cpt_mesh_sphere + cpt_mesh_sphere.translated_x(5.0)).cop
     # When we get rid of the dependency to Capytaine, this test might need to be restructured.
 
     @testset "Pure Rankine, direct=$direct" for direct in [true, false]
-        green_functions = (Rankine(),)
+        green_functions = (DelhommeauRankine(),)
         S, D = assemble_matrices(green_functions, mesh, 1.0, direct=direct)
         capy_S, capy_D = cpt.Delhommeau().evaluate(cptmesh, cptmesh, free_surface=Inf, water_depth=Inf, wavenumber=1.0, adjoint_double_layer=!direct)
         @test S ≈ capy_S  atol=1e-6
@@ -24,7 +24,7 @@ cpt_mesh_two_spheres = (cpt_mesh_sphere + cpt_mesh_sphere.translated_x(5.0)).cop
     end
 
     @testset "Rankine + reflected, direct=$direct" for direct in [true, false]
-        green_functions = (Rankine(), RankineReflected())
+        green_functions = (DelhommeauRankine(), DelhommeauRankineReflected())
         S, D = assemble_matrices(green_functions, mesh, 1.0, direct=direct)
         capy_S, capy_D = cpt.Delhommeau().evaluate(cptmesh, cptmesh, free_surface=0.0, water_depth=Inf, wavenumber=0.0, adjoint_double_layer=!direct)
         @test S ≈ capy_S  atol=1e-6
@@ -32,7 +32,7 @@ cpt_mesh_two_spheres = (cpt_mesh_sphere + cpt_mesh_sphere.translated_x(5.0)).cop
     end
 
     @testset "Rankine - reflected, direct=$direct" for direct in [true, false]
-        green_functions = (Rankine(), RankineReflectedNegative())
+        green_functions = (DelhommeauRankine(), DelhommeauRankineReflectedNegative())
         S, D = assemble_matrices(green_functions, mesh, 1.0, direct=direct)
         capy_S, capy_D = cpt.Delhommeau().evaluate(cptmesh, cptmesh, free_surface=0.0, water_depth=Inf, wavenumber=Inf, adjoint_double_layer=!direct)
         @test S ≈ capy_S  atol=1e-6
@@ -40,7 +40,7 @@ cpt_mesh_two_spheres = (cpt_mesh_sphere + cpt_mesh_sphere.translated_x(5.0)).cop
     end
 
     @testset "Full Green function with Guével-Delhommeau, direct=$direct, k=$k" for direct in [true, false], k in [1.0, 2.0]
-        green_functions = (Rankine(), RankineReflected(), ExactGuevelDelhommeau(),)
+        green_functions = (DelhommeauRankine(), DelhommeauRankineReflected(), ExactGuevelDelhommeau(),)
         S, D = assemble_matrices(green_functions, mesh, k, direct=direct)
         capy_S, capy_D = cpt.Delhommeau(tabulation_nr=0).evaluate(cptmesh, cptmesh, free_surface=0.0, water_depth=Inf, wavenumber=k, adjoint_double_layer=!direct)
         @test real.(S) ≈ real.(capy_S)  atol=1e-3
@@ -50,7 +50,7 @@ cpt_mesh_two_spheres = (cpt_mesh_sphere + cpt_mesh_sphere.translated_x(5.0)).cop
     end
 
     @testset "Full Green function with Wu, direct=$direct, k=$k" for direct in [true, false], k in [1.0, 2.0]
-        green_functions = (Rankine(), RankineReflected(), GFWu())
+        green_functions = (DelhommeauRankine(), DelhommeauRankineReflected(), GFWu())
         S, D = assemble_matrices(green_functions, mesh, k, direct=direct)
         capy_S, capy_D = cpt.Delhommeau(tabulation_nr=0).evaluate(cptmesh, cptmesh, free_surface=0.0, water_depth=Inf, wavenumber=k, adjoint_double_layer=!direct)
         @test real.(S) ≈ real.(capy_S)  atol=1e-2

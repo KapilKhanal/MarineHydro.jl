@@ -30,7 +30,7 @@ normals = [SVector(0.0, 0.0, 1.0), SVector(0.0, 0.0, 1.0)]
 smesh = MH.StaticArraysMesh(vertices, faces, centers, normals, [1.0, 1.0], [sqrt(0.5), sqrt(0.5)], 6, 2)
 
 gfs = (Rankine(), RankineReflected(), GFWu())
-gfs_v = (VRankine(), VRankineReflected(), GFWu())
+gfs_del = (DelhommeauRankine(), DelhommeauRankineReflected(), GFWu())
 k = 1.0
 ω = 1.0
 bc = [-1im * ω * n[3] for n in smesh.normals]
@@ -43,9 +43,9 @@ bc = [-1im * ω * n[3] for n in smesh.normals]
     @test S ≈ S2 ≈ S3
     @test D ≈ D2 ≈ D3
 
-    Sv, Dv = assemble_matrices(gfs_v, smesh, k)
-    @test size(Sv) == (2, 2)
-    @test Sv ≈ S rtol=1e-2 atol=1e-3
+    Sd, Dd = assemble_matrices(gfs_del, smesh, k)
+    @test size(Sd) == (2, 2)
+    @test Sd ≈ S rtol=1e-2 atol=1e-3
 
     ϕ, _ = solve(D, S, bc; direct=true)
     @test length(ϕ) == 2

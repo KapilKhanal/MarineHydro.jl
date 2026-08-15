@@ -1,6 +1,7 @@
 using Test
 using LinearAlgebra
 using StaticArrays
+using PyCall
 using MarineHydro
 
 const MH = MarineHydro
@@ -151,7 +152,7 @@ end
     end
 end
 
-@testset "VRankine matches Rankine" begin
+@testset "Rankine matches DelhommeauRankine" begin
     e1 = (center=[0.0, 0.0, -1.0],)
     e2 = (
         center=[1.0, 1.0, -2.0],
@@ -161,42 +162,55 @@ end
         radius=sqrt(2)/2,
     )
 
-    @test greens(VRankine(), e1, e2) ≈ greens(Rankine(), e1, e2) atol=1e-12
-    @test integral(VRankine(), e1, e2) ≈ integral(Rankine(), e1, e2) rtol=1e-4 atol=1e-4
-    @test integral_gradient(VRankine(), e1, e2; with_respect_to_first_variable=true) ≈
-          integral_gradient(Rankine(), e1, e2; with_respect_to_first_variable=true) rtol=1e-4 atol=1e-4
-    @test integral_gradient(VRankine(), e1, e2; with_respect_to_first_variable=false) ≈
-          integral_gradient(Rankine(), e1, e2; with_respect_to_first_variable=false) rtol=1e-4 atol=1e-4
+    @test greens(Rankine(), e1, e2) ≈ greens(DelhommeauRankine(), e1, e2) atol=1e-12
+    @test integral(Rankine(), e1, e2) ≈ integral(DelhommeauRankine(), e1, e2) rtol=1e-4 atol=1e-4
+    @test integral_gradient(Rankine(), e1, e2; with_respect_to_first_variable=true) ≈
+          integral_gradient(DelhommeauRankine(), e1, e2; with_respect_to_first_variable=true) rtol=1e-4 atol=1e-4
+    @test integral_gradient(Rankine(), e1, e2; with_respect_to_first_variable=false) ≈
+          integral_gradient(DelhommeauRankine(), e1, e2; with_respect_to_first_variable=false) rtol=1e-4 atol=1e-4
 
-    @test greens(VRankineReflected(), e1, e2) ≈ greens(RankineReflected(), e1, e2) atol=1e-12
-    @test integral(VRankineReflected(), e1, e2) ≈ integral(RankineReflected(), e1, e2) rtol=1e-4 atol=1e-4
-    @test integral_gradient(VRankineReflected(), e1, e2; with_respect_to_first_variable=true) ≈
-          integral_gradient(RankineReflected(), e1, e2; with_respect_to_first_variable=true) rtol=1e-4 atol=1e-4
-    @test integral_gradient(VRankineReflected(), e1, e2; with_respect_to_first_variable=false) ≈
-          integral_gradient(RankineReflected(), e1, e2; with_respect_to_first_variable=false) rtol=1e-4 atol=1e-4
+    @test greens(RankineReflected(), e1, e2) ≈ greens(DelhommeauRankineReflected(), e1, e2) atol=1e-12
+    @test integral(RankineReflected(), e1, e2) ≈ integral(DelhommeauRankineReflected(), e1, e2) rtol=1e-4 atol=1e-4
+    @test integral_gradient(RankineReflected(), e1, e2; with_respect_to_first_variable=true) ≈
+          integral_gradient(DelhommeauRankineReflected(), e1, e2; with_respect_to_first_variable=true) rtol=1e-4 atol=1e-4
+    @test integral_gradient(RankineReflected(), e1, e2; with_respect_to_first_variable=false) ≈
+          integral_gradient(DelhommeauRankineReflected(), e1, e2; with_respect_to_first_variable=false) rtol=1e-4 atol=1e-4
 end
 
-@testset "VRankine vs Rankine on a sphere mesh" begin
+@testset "DelhommeauRankine both_integral matches integral and integral_gradient" begin
+    mesh = Mesh(MH.example_mesh_from_capytaine(4))
+    for (i, j) in ((1, 2), (1, 1), (3, 5))
+        e1 = element(mesh, i)
+        e2 = element(mesh, j)
+        for wrt_first in (true, false)
+            S, G = MH.both_integral_and_integral_gradient(DelhommeauRankine(), e1, e2; with_respect_to_first_variable=wrt_first)
+            @test S ≈ integral(DelhommeauRankine(), e1, e2) rtol=1e-12 atol=1e-12
+            @test G ≈ integral_gradient(DelhommeauRankine(), e1, e2; with_respect_to_first_variable=wrt_first) rtol=1e-12 atol=1e-12
+        end
+    end
+end
+
+@testset "Rankine vs DelhommeauRankine on a sphere mesh" begin
     mesh = Mesh(MH.example_mesh_from_capytaine(4))
 
     for i in 1:mesh.nfaces
         for j in 1:mesh.nfaces
             e1 = element(mesh, i)
             e2 = element(mesh, j)
-            @test integral(VRankine(), e1, e2) ≈ integral(Rankine(), e1, e2) rtol=1e-3 atol=1e-4
-            @test integral_gradient(VRankine(), e1, e2; with_respect_to_first_variable=true) ≈
-                  integral_gradient(Rankine(), e1, e2; with_respect_to_first_variable=true) rtol=1e-3 atol=1e-4
-            @test integral_gradient(VRankine(), e1, e2; with_respect_to_first_variable=false) ≈
-                  integral_gradient(Rankine(), e1, e2; with_respect_to_first_variable=false) rtol=1e-3 atol=1e-4
+            @test integral(Rankine(), e1, e2) ≈ integral(DelhommeauRankine(), e1, e2) rtol=1e-3 atol=1e-4
+            @test integral_gradient(Rankine(), e1, e2; with_respect_to_first_variable=true) ≈
+                  integral_gradient(DelhommeauRankine(), e1, e2; with_respect_to_first_variable=true) rtol=1e-3 atol=1e-4
+            @test integral_gradient(Rankine(), e1, e2; with_respect_to_first_variable=false) ≈
+                  integral_gradient(DelhommeauRankine(), e1, e2; with_respect_to_first_variable=false) rtol=1e-3 atol=1e-4
         end
     end
 end
 
-@testset "Vectorized Rankine influence matrices" begin
+@testset "Rankine influence matrices match DelhommeauRankine" begin
     mesh = Mesh(MH.example_mesh_from_capytaine())
     k = 1.0
-    old_gfs = (Rankine(), RankineReflected())
-    new_gfs = (VRankine(), VRankineReflected())
+    old_gfs = (DelhommeauRankine(), DelhommeauRankineReflected())
+    new_gfs = (Rankine(), RankineReflected())
     S, D = assemble_matrices(old_gfs, mesh, k; direct=true)
     Sv, Dv = assemble_matrices(new_gfs, mesh, k; direct=true)
     @test Sv ≈ S rtol=1e-3 atol=1e-4
@@ -206,4 +220,48 @@ end
     Sv_ind, Kv = assemble_matrices(new_gfs, mesh, k; direct=false)
     @test Sv_ind ≈ S_ind rtol=1e-3 atol=1e-4
     @test Kv ≈ K rtol=1e-3 atol=1e-4
+end
+
+function _compare_rankine_coefficients(floatingbody, parameters; rtol=1e-2, atol=1e-2)
+    delhommeau_gfs = (DelhommeauRankine(), DelhommeauRankineReflected(), GFWu())
+    rankine_gfs = (Rankine(), RankineReflected(), GFWu())
+    data_d = compute_hydrodynamic_coefficients(parameters, floatingbody; greens_functions=delhommeau_gfs)
+    data_r = compute_hydrodynamic_coefficients(parameters, floatingbody; greens_functions=rankine_gfs)
+    @test data_r.added_mass ≈ data_d.added_mass rtol=rtol atol=atol
+    @test data_r.radiation_damping ≈ data_d.radiation_damping rtol=rtol atol=atol
+    @test data_r.diffraction_force ≈ data_d.diffraction_force rtol=rtol atol=atol
+    @test data_r.excitation_force ≈ data_d.excitation_force rtol=rtol atol=atol
+    @test data_r.Froude_Krylov_force ≈ data_d.Froude_Krylov_force rtol=1e-12 atol=1e-12
+end
+
+@testset "Rankine hydrodynamic coefficients match DelhommeauRankine" begin
+    @testset "sphere" begin
+        mesh = Mesh(MH.example_mesh_from_capytaine(4))
+        floatingbody = FloatingBody(mesh, ["Heave", "Surge"], [0.0, 0.0, 0.0], "sphere")
+        parameters = (
+            wave_frequencies=[1.0, 2.0],
+            wave_directions=[0.0],
+            radiating_dofs=[:Heave, :Surge],
+            influenced_dofs=[:Heave, :Surge],
+        )
+        _compare_rankine_coefficients(floatingbody, parameters)
+    end
+
+    @testset "horizontal cylinder" begin
+        cpt = pyimport("capytaine")
+        cptmesh = cpt.meshes.predefined.mesh_horizontal_cylinder(
+            radius=1.5,
+            center=(0.0, 0.0, 0.0),
+            length=2.5,
+            faces_max_radius=0.8,
+        ).keep_immersed_part(inplace=true)
+        floatingbody = FloatingBody(Mesh(cptmesh), ["Heave", "Pitch"], [0.0, 0.0, 0.0], "Horizontal_Cylinder")
+        parameters = (
+            wave_frequencies=[1.0, 1.5],
+            wave_directions=[0.0],
+            radiating_dofs=[:Heave, :Pitch],
+            influenced_dofs=[:Heave, :Pitch],
+        )
+        _compare_rankine_coefficients(floatingbody, parameters)
+    end
 end

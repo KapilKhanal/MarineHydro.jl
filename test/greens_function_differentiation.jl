@@ -107,8 +107,8 @@ using StaticArrays
         end
 
         @testset "primal agreement $name" for (name, gf_old, gf_new) in (
-            ("Rankine", Rankine(), VRankine()),
-            ("RankineReflected", RankineReflected(), VRankineReflected()),
+            ("Rankine", DelhommeauRankine(), Rankine()),
+            ("RankineReflected", DelhommeauRankineReflected(), RankineReflected()),
         )
             @test integral(gf_new, e1, e2) ≈ integral(gf_old, e1, e2) rtol=1e-4 atol=1e-6
             @test collect(integral_gradient(gf_new, e1, e2; with_respect_to_first_variable=true)) ≈
@@ -118,10 +118,10 @@ using StaticArrays
         end
 
         @testset "$name first-order AD" for (name, gf) in (
+            ("DelhommeauRankine", DelhommeauRankine()),
             ("Rankine", Rankine()),
-            ("VRankine", VRankine()),
+            ("DelhommeauRankineReflected", DelhommeauRankineReflected()),
             ("RankineReflected", RankineReflected()),
-            ("VRankineReflected", VRankineReflected()),
         )
             integral_center1(center) = integral(gf, (center=center,), e2)
             integral_center2(center) = integral(gf, e1, panel_at(center))
@@ -141,8 +141,8 @@ using StaticArrays
             @test !any(isnan, g_zygote2)
         end
 
-        @testset "Rankine vs VRankine Zygote agreement" begin
-            for (gf_old, gf_new) in ((Rankine(), VRankine()), (RankineReflected(), VRankineReflected()))
+        @testset "DelhommeauRankine vs Rankine Zygote agreement" begin
+            for (gf_old, gf_new) in ((DelhommeauRankine(), Rankine()), (DelhommeauRankineReflected(), RankineReflected()))
                 g_old1 = Zygote.gradient(c -> integral(gf_old, (center=c,), e2), e1.center)[1]
                 g_new1 = Zygote.gradient(c -> integral(gf_new, (center=c,), e2), e1.center)[1]
                 @test g_old1 ≈ g_new1 rtol=1e-4 atol=1e-6
@@ -154,8 +154,8 @@ using StaticArrays
         end
 
         @testset "$name second-order AD" for (name, gf) in (
+            ("DelhommeauRankine", DelhommeauRankine()),
             ("Rankine", Rankine()),
-            ("VRankine", VRankine()),
         )
             grad_center1(center) = collect(integral_gradient(gf, (center=center,), e2; with_respect_to_first_variable=true))
             J_zygote = Zygote.jacobian(grad_center1, e1.center)[1]
@@ -166,13 +166,13 @@ using StaticArrays
             @test !any(isnan, J_zygote)
         end
 
-        @testset "Rankine vs VRankine Hessian agreement" begin
-            J_old = Zygote.jacobian(c -> collect(integral_gradient(Rankine(), (center=c,), e2; with_respect_to_first_variable=true)), e1.center)[1]
-            J_new = Zygote.jacobian(c -> collect(integral_gradient(VRankine(), (center=c,), e2; with_respect_to_first_variable=true)), e1.center)[1]
+        @testset "DelhommeauRankine vs Rankine Hessian agreement" begin
+            J_old = Zygote.jacobian(c -> collect(integral_gradient(DelhommeauRankine(), (center=c,), e2; with_respect_to_first_variable=true)), e1.center)[1]
+            J_new = Zygote.jacobian(c -> collect(integral_gradient(Rankine(), (center=c,), e2; with_respect_to_first_variable=true)), e1.center)[1]
             @test J_old ≈ J_new rtol=1e-4 atol=1e-6
         end
 
-        @testset "VRankine ChainRules use analytic Birk derivatives" begin
+        @testset "Rankine ChainRules use analytic Birk derivatives" begin
             Tmat, qgc, local_corners, _ = MarineHydro.birk_panel_geometry(e2.vertices)
             p = Tmat' * (SVector{3}(e1.center) - SVector{3}(qgc))
             x, y, z = p[1], p[2], p[3]

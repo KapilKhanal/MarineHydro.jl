@@ -29,6 +29,7 @@ end
     include("./matrix_assembly_differentiation.jl")
     include("./consistency_with_analytical_solutions.jl")
     include("./outputs_differentiation.jl")
+    include("./solve_problem_differentiation.jl")
     include("./forward_speed_tests.jl")
     include_optional_tests("./gpu_cpu_smoke.jl")
     include_optional_tests("./gpu.jl")
