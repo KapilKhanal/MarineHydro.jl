@@ -3,13 +3,19 @@ using LinearAlgebra
 using StaticArrays
 using ForwardDiff
 using Zygote
-using Enzyme
 using DifferentiationInterface
 using MarineHydro
 
 const MH = MarineHydro
 
-# Optional backends: JLArray is the CPU dummy GPU; CUDA / Metal if present.
+const HAS_ENZYME = try
+    using Enzyme
+    true
+catch
+    false
+end
+
+# Optional backends: not test Project.toml deps. CUDA/Metal stay off Linux CI.
 const GPU_ARRAY_TYPES = Pair{String,Any}[]
 try
     using JLArrays
@@ -240,7 +246,9 @@ function run_backend_tests(arrtype, label)
         @testset "Enzyme reverse" begin
             # JLArray/Metal: Enzyme hits GPUArrays broadcast `mkcontext` (not an assembly bug).
             # CuArray is still attempted when CUDA.functional().
-            if string(nameof(arrtype)) in ("JLArray", "MtlArray")
+            if !HAS_ENZYME
+                @test_skip "Enzyme not installed"
+            elseif string(nameof(arrtype)) in ("JLArray", "MtlArray")
                 @test_skip "Enzyme reverse cannot differentiate $label GPUArrays broadcasts yet"
             else
                 gpu_grad = enzyme_assembly_derivative(arrtype, gfs_wu, smesh, k)
