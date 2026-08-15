@@ -1,5 +1,6 @@
 using Test
 using Zygote
+using ForwardDiff
 using MarineHydro
 using PyCall
 using LinearAlgebra
@@ -105,5 +106,25 @@ using LinearAlgebra
         @test typeof(JD) == Matrix{Float64}
         @test typeof(JS) == Matrix{Float64}
         @test typeof(Jbc) == Matrix{Float64}
+    end
+
+    @testset "Fused Wu assemble d/dk matches ForwardDiff and Zygote" begin
+        smesh = MarineHydro.StaticArraysMesh(mesh)
+        k0 = 1.2
+        function f(k)
+            S, D = MarineHydro.assemble_wu_centers(smesh, k, Val(true); include_identity=false)
+            return real(sum(S) + sum(D))
+        end
+        fd = ForwardDiff.derivative(f, k0)
+        zy = Zygote.gradient(f, k0)[1]
+        @test zy !== nothing
+        @test zy ≈ fd rtol=1e-8 atol=1e-8
+        for direct in (true, false)
+            g(k) = begin
+                S, D = MarineHydro.assemble_wu_centers(smesh, k, Val(direct); include_identity=false)
+                real(sum(S)) + imag(sum(D))
+            end
+            @test Zygote.gradient(g, k0)[1] ≈ ForwardDiff.derivative(g, k0) rtol=1e-8 atol=1e-8
+        end
     end
 end

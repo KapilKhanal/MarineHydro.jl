@@ -92,30 +92,38 @@ end
 
 @inline _wu_integral_centers(c1, c2, area2, k) = _wu_greens(c1, c2, k) * area2
 
-# `direct` is a compile-time Val so broadcast does not carry a Bool branch.
+# One Bessel/Struve evaluation per pair; S and D share `_wu_wave_term_and_derivs`.
+# `direct` is a compile-time Val so the kernel does not carry a Bool branch.
 @inline _wu_ndot_gradient_centers(c1, c2, n, area2, k, direct::Bool) =
     _wu_ndot_gradient_centers(c1, c2, n, area2, k, Val(direct))
 
-@inline function _wu_ndot_gradient_centers(c1, c2, n, area2, k, ::Val{true})
-    _wu_ndot_g(c1, c2, n, area2, k, c2[1] - c1[1], c2[2] - c1[2])
+@inline function _wu_ndot_gradient_centers(c1, c2, n, area2, k, ::Val{direct}) where {direct}
+    _wu_sd_centers(c1, c2, n, area2, k, Val(direct))[2]
 end
 
-@inline function _wu_ndot_gradient_centers(c1, c2, n, area2, k, ::Val{false})
-    _wu_ndot_g(c1, c2, n, area2, k, c1[1] - c2[1], c1[2] - c2[2])
+@inline function _wu_sd_centers(c1, c2, n, area2, k, ::Val{true})
+    _wu_sd(c1, c2, n, area2, k, c2[1] - c1[1], c2[2] - c1[2])
 end
 
-@inline function _wu_ndot_g(x, xi, n, area2, k, dx1, dx2)
+@inline function _wu_sd_centers(c1, c2, n, area2, k, ::Val{false})
+    _wu_sd(c1, c2, n, area2, k, c1[1] - c2[1], c1[2] - c2[2])
+end
+
+@inline function _wu_sd(x, xi, n, area2, k, dx1, dx2)
     hh, vv = _wu_reduced_hh_vv(x, xi, k)
-    _, dGF_dhh, dGF_dvv = _wu_wave_term_and_derivs(hh, vv)
+    GF, dGF_dhh, dGF_dvv = _wu_wave_term_and_derivs(hh, vv)
     if abs(hh) > 1e-6
         dr1 = k^2 / hh * dx1
         dr2 = k^2 / hh * dx2
     else
-        dr1 = zero(x[1])
-        dr2 = zero(x[2])
+        z = zero(hh)
+        dr1 = z
+        dr2 = z
     end
     g = k * (zero(x) .+ (dr1 * dGF_dhh, dr2 * dGF_dhh, k * dGF_dvv))
-    return (n' * g) * area2
+    s = (k * GF) * area2
+    d = (n' * g) * area2
+    return s, d
 end
 
 ######################################################

@@ -222,6 +222,23 @@ end
     @test Kv ≈ K rtol=1e-3 atol=1e-4
 end
 
+@testset "Vectorized StaticArraysMesh Rankine influence matrices match DelhommeauRankine" begin
+    mesh = Mesh(MH.example_mesh_from_capytaine())
+    smesh = StaticArraysMesh(mesh)
+    k = 1.0
+    old_gfs = (DelhommeauRankine(), DelhommeauRankineReflected())
+    new_gfs = (Rankine(), RankineReflected())
+    S, D = assemble_matrices(old_gfs, mesh, k; direct=true)
+    Sv, Dv = assemble_matrices(new_gfs, smesh, k; direct=true)
+    @test Sv ≈ S rtol=1e-3 atol=1e-4
+    @test Dv ≈ D rtol=1e-3 atol=1e-4
+
+    S_ind, K = assemble_matrices(old_gfs, mesh, k; direct=false)
+    Sv_ind, Kv = assemble_matrices(new_gfs, smesh, k; direct=false)
+    @test Sv_ind ≈ S_ind rtol=1e-3 atol=1e-4
+    @test Kv ≈ K rtol=1e-3 atol=1e-4
+end
+
 function _compare_rankine_coefficients(floatingbody, parameters; rtol=1e-2, atol=1e-2)
     delhommeau_gfs = (DelhommeauRankine(), DelhommeauRankineReflected(), GFWu())
     rankine_gfs = (Rankine(), RankineReflected(), GFWu())

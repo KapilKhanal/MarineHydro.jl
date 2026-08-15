@@ -52,6 +52,21 @@ S_conv, D_conv = assemble_matrices(greens_functions, smesh_from_mesh, 1.0)
     end
 end
 
+@testset "Rankine reused across wavenumbers on StaticArraysMesh" begin
+    static_gfs, wave_gfs = MarineHydro.partition_greens_functions(greens_functions)
+    Ss1, Ds1 = assemble_matrices(static_gfs, smesh, 1.0)
+    Ss2, Ds2 = assemble_matrices(static_gfs, smesh, 2.0)
+    @test Ss1 ≈ Ss2
+    @test Ds1 ≈ Ds2
+
+    for k in (0.7, 1.5)
+        S_full, D_full = assemble_matrices(greens_functions, smesh, k)
+        Sw, Dw = assemble_matrices(wave_gfs, smesh, k; include_identity=false)
+        @test S_full ≈ Ss1 .+ Sw
+        @test D_full ≈ Ds1 .+ Dw
+    end
+end
+
 @testset "solve_all_problems reuses Rankine and matches per-problem solves" begin
     mesh4 = Mesh(MarineHydro.example_mesh_from_capytaine(4))
     body = FloatingBody(mesh4, ["Heave"], [0.0, 0.0, 0.0], "sphere")
@@ -87,6 +102,9 @@ end
     e2 = element(smesh, 2)
     @test MarineHydro._wu_greens(e1.center, e2.center, k) ≈ greens(GFWu(), e1, e2, k)
     @test MarineHydro._wu_integral_centers(e1.center, e2.center, e2.area, k) ≈ integral(GFWu(), e1, e2, k)
+    s_ij, d_ij = MarineHydro._wu_sd_centers(e1.center, e2.center, e2.normal, e2.area, k, Val(true))
+    @test s_ij ≈ MarineHydro._wu_integral_centers(e1.center, e2.center, e2.area, k)
+    @test d_ij ≈ MarineHydro._wu_ndot_gradient_centers(e1.center, e2.center, e2.normal, e2.area, k, Val(true))
 end
 
 @testset "Vectorized StaticArraysMesh assemble matches comprehension" begin

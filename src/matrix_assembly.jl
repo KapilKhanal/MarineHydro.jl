@@ -296,23 +296,72 @@ function assemble_wu_centers(mesh::StaticArraysMesh, wavenumber; direct=true, in
 end
 
 function assemble_wu_centers(mesh::StaticArraysMesh, wavenumber, ::Val{direct}; include_identity=true) where {direct}
+    _assemble_wu_centers_fused(mesh, wavenumber, Val(direct), include_identity)
+end
+
+# Fused S/D primal. ForwardDiff seeds Dual into `k` and runs this loop.
+# Zygote uses the rrule below (mutation is not on the reverse tape).
+function _assemble_wu_centers_fused(mesh, k, direct::Val, include_identity::Bool)
+    _assemble_wu_centers_loop(mesh, k, direct, include_identity)
+end
+
+function _assemble_wu_centers_loop(mesh, k, ::Val{direct}, include_identity::Bool) where {direct}
+    n = mesh.nfaces
     centers = mesh.centers
     areas = mesh.areas
     normals = mesh.normals
-    n = mesh.nfaces
-    co_c = reshape(centers, 1, n)
-    co_a = reshape(areas, 1, n)
-    inv4π = -1 / 4π
-    S = inv4π .* _wu_integral_centers.(centers, co_c, co_a, wavenumber)
-    if direct
-        co_n = reshape(normals, 1, n)
-        D = inv4π .* _wu_ndot_gradient_centers.(centers, co_c, co_n, co_a, wavenumber, Val(true))
-    else
-        D = inv4π .* _wu_ndot_gradient_centers.(centers, co_c, normals, co_a, wavenumber, Val(false))
+    RT = typeof(float(real(k)))
+    T = Complex{RT}
+    scale = convert(T, -1 / 4π)
+    S = Matrix{T}(undef, n, n)
+    D = Matrix{T}(undef, n, n)
+    @inbounds for j in 1:n
+        c2 = centers[j]
+        a2 = areas[j]
+        n2 = normals[j]
+        for i in 1:n
+            nvec = direct ? n2 : normals[i]
+            sij, dij = _wu_sd_centers(centers[i], c2, nvec, a2, k, Val(direct))
+            S[i, j] = scale * sij
+            D[i, j] = scale * dij
+        end
     end
-    T = eltype(D)
-    include_identity || return S, D
-    return S, D + T(0.5) * I
+    if include_identity
+        half = convert(T, 0.5)
+        @inbounds for i in 1:n
+            D[i, i] += half
+        end
+    end
+    return S, D
+end
+
+@inline function _real_inner(Ā, A)
+    Ā isa AbstractZero && return zero(real(A[1])) * false
+    s = zero(real(A[1])) * zero(real(first(Ā)))
+    @inbounds for i in eachindex(A)
+        gi = Ā[i]
+        ai = A[i]
+        s += real(gi) * real(ai) + imag(gi) * imag(ai)
+    end
+    return s
+end
+
+function ChainRulesCore.rrule(::typeof(_assemble_wu_centers_fused), mesh, k, direct::Val, include_identity::Bool)
+    y = _assemble_wu_centers_loop(mesh, k, direct, include_identity)
+    function assemble_wu_centers_pullback(ȳ)
+        ȳu = unthunk(ȳ)
+        if ȳu isa AbstractZero
+            return (NoTangent(), NoTangent(), zero(k), NoTangent(), NoTangent())
+        end
+        S̄ = unthunk(ȳu[1])
+        D̄ = unthunk(ȳu[2])
+        ∂k = ForwardDiff.derivative(k) do κ
+            S, D = _assemble_wu_centers_loop(mesh, κ, direct, include_identity)
+            _real_inner(S̄, S) + _real_inner(D̄, D)
+        end
+        return (NoTangent(), NoTangent(), ∂k, NoTangent(), NoTangent())
+    end
+    return y, assemble_wu_centers_pullback
 end
 
 
