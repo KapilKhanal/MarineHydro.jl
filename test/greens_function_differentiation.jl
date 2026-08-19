@@ -7,6 +7,13 @@ using PyCall
 using LinearAlgebra
 using StaticArrays
 
+const HAS_ENZYME = try
+    using Enzyme
+    true
+catch
+    false
+end
+
 @testset "Greens Function Differentiability Tests" begin
     # Define elements
     e1 = (center=[0.0, 0.0, -1.0],)
@@ -185,6 +192,44 @@ using StaticArrays
             Jv = Zygote.jacobian(q -> MarineHydro.velocity_derivatives(q[1], q[2], q[3], local_corners), [x, y, z])[1]
             @test Jv ≈ collect(H) atol=1e-12
             @test Jv ≈ ForwardDiff.jacobian(q -> MarineHydro.velocity_derivatives(q[1], q[2], q[3], local_corners), [x, y, z]) rtol=1e-8
+        end
+
+        if HAS_ENZYME
+            @testset "Enzyme matches Zygote on Rankine geometry" begin
+                mode = Enzyme.set_runtime_activity(Enzyme.Reverse)
+                function enzyme_integral_c1(center, e2c, gf)
+                    return integral(gf, (center=center,), e2c)
+                end
+                function enzyme_integral_verts(verts, c1, c2, n, r, a, gf)
+                    e2n = (center=c2, vertices=verts, normal=n, radius=r, area=a)
+                    return integral(gf, (center=c1,), e2n)
+                end
+                for gf in (Rankine(), RankineReflected())
+                    g_zy = Zygote.gradient(c -> integral(gf, (center=c,), e2), e1.center)[1]
+                    g_ez = first(Enzyme.gradient(mode, enzyme_integral_c1, copy(e1.center),
+                        Enzyme.Const(e2), Enzyme.Const(gf)))
+                    @test all(isfinite, g_ez)
+                    @test g_ez ≈ g_zy rtol=1e-8 atol=1e-10
+
+                    g_zy_v = Zygote.gradient(v -> integral(gf, e1, (center=e2.center, vertices=v,
+                        normal=e2.normal, radius=e2.radius, area=e2.area)), e2.vertices)[1]
+                    g_ez_v = first(Enzyme.gradient(mode, enzyme_integral_verts, copy(e2.vertices),
+                        Enzyme.Const(e1.center), Enzyme.Const(e2.center), Enzyme.Const(e2.normal),
+                        Enzyme.Const(e2.radius), Enzyme.Const(e2.area), Enzyme.Const(gf)))
+                    @test all(isfinite, g_ez_v)
+                    @test g_ez_v ≈ g_zy_v rtol=1e-8 atol=1e-10
+                end
+
+                Tmat, qgc, local_corners, _ = MarineHydro.birk_panel_geometry(e2.vertices)
+                p = Tmat' * (SVector{3}(e1.center) - SVector{3}(qgc))
+                x, y, z = p[1], p[2], p[3]
+                v = MarineHydro.velocity_derivatives(x, y, z, local_corners)
+                function enzyme_φ(a, b, c, lc)
+                    return MarineHydro.velocity_potential(a, b, c, lc)
+                end
+                gφ = Enzyme.gradient(mode, enzyme_φ, x, y, z, Enzyme.Const(local_corners))
+                @test [gφ[1], gφ[2], gφ[3]] ≈ collect(v) atol=1e-12
+            end
         end
     end
 

@@ -8,8 +8,8 @@ abstract type LinearPotentialFlowProblem end
 _problem_scalar_type(vals...) = promote_type(map(typeof, vals)...)
 
 # Define DiffractionProblem struct as a subtype of LinearPotentialFlowProblem
-struct DiffractionProblem{T} <: LinearPotentialFlowProblem
-    floatingbody::FloatingBody
+struct DiffractionProblem{T, B} <: LinearPotentialFlowProblem
+    floatingbody::B
     omega::T
     beta::T
     wavenumber::T
@@ -18,13 +18,13 @@ struct DiffractionProblem{T} <: LinearPotentialFlowProblem
     encountered_wavenumber::T
     forward_speed::T
     influenced_dofs::Vector{Symbol}
-    function DiffractionProblem(floatingbody::FloatingBody,
+    function DiffractionProblem(floatingbody::B,
         omega, beta, wavenumber,
         encountered_omega, encountered_beta, encountered_wavenumber,
-        forward_speed, influenced_dofs::Vector{Symbol})
+        forward_speed, influenced_dofs::Vector{Symbol}) where B
         @assert influenced_dofs ⊆ keys(floatingbody.dofs) "the influenced_dofs Symbols must be a key of floatingbody.dof"
         T = _problem_scalar_type(omega, beta, wavenumber, encountered_omega, encountered_beta, encountered_wavenumber, forward_speed)
-        return new{T}(floatingbody, T(omega), T(beta), T(wavenumber),
+        return new{T, B}(floatingbody, T(omega), T(beta), T(wavenumber),
             T(encountered_omega), T(encountered_beta), T(encountered_wavenumber), T(forward_speed), influenced_dofs)
     end
 end
@@ -40,30 +40,32 @@ function DiffractionProblem(floatingbody::FloatingBody,
 end
 
 
-# Define RadiationProblem struct as a subtype of LinearPotentialFlowProblem
-struct RadiationProblem{T} <: LinearPotentialFlowProblem
-    floatingbody::FloatingBody
+# `B` is the concrete `FloatingBody{...}` type. Enzyme reverse through an
+# abstract `floatingbody::FloatingBody` field (and `Union{T,Nothing}` betas)
+# crashed with "illegal insertion" when the mesh was active.
+struct RadiationProblem{T, B} <: LinearPotentialFlowProblem
+    floatingbody::B
     omega::T
-    beta::Union{T, Nothing}
+    beta::T
     wavenumber::T
     encountered_omega::T
-    encountered_beta::Union{T, Nothing}
+    encountered_beta::T
     encountered_wavenumber::T
     forward_speed::T
     radiating_dof::Symbol
     influenced_dofs::Vector{Symbol}
-    function RadiationProblem(floatingbody::FloatingBody,
+    function RadiationProblem(floatingbody::B,
         omega, beta, wavenumber,
         encountered_omega, encountered_beta, encountered_wavenumber,
-        forward_speed, radiating_dof::Symbol, influenced_dofs::Vector{Symbol})
+        forward_speed, radiating_dof::Symbol, influenced_dofs::Vector{Symbol}) where B
         @assert (radiating_dof in keys(floatingbody.dofs)) "the radiating_dof Symbol must be a key of floatingbody.dof"
         @assert influenced_dofs ⊆ keys(floatingbody.dofs) "the influenced_dofs Symbols must be a key of floatingbody.dof"
         scalars = (omega, wavenumber, encountered_omega, encountered_wavenumber, forward_speed)
         beta_vals = filter(!isnothing, (beta, encountered_beta))
         T = _problem_scalar_type(scalars..., beta_vals...)
-        β = isnothing(beta) ? nothing : T(beta)
-        βe = isnothing(encountered_beta) ? nothing : T(encountered_beta)
-        return new{T}(floatingbody, T(omega), β, T(wavenumber),
+        β = isnothing(beta) ? zero(T) : T(beta)
+        βe = isnothing(encountered_beta) ? zero(T) : T(encountered_beta)
+        return new{T, B}(floatingbody, T(omega), β, T(wavenumber),
             T(encountered_omega), βe, T(encountered_wavenumber), T(forward_speed), radiating_dof, influenced_dofs)
     end
 end
@@ -79,6 +81,20 @@ function RadiationProblem(floatingbody::FloatingBody,
     end
 end
 
+function RadiationProblem(floatingbody::FloatingBody, omega;
+        radiating_dof::Union{Symbol,Nothing}=nothing,
+        influenced_dofs::Union{AbstractVector,Nothing}=nothing,
+        beta=nothing,
+        forward_speed=0,
+        wavenumber=nothing)
+    inf = isnothing(influenced_dofs) ?
+        collect(Symbol, keys(floatingbody.dofs)) :
+        collect(Symbol, influenced_dofs)
+    rad = isnothing(radiating_dof) ? only(inf) : radiating_dof
+    k = isnothing(wavenumber) ? compute_wavenumber(omega) : wavenumber
+    return RadiationProblem(floatingbody, omega, beta, k, forward_speed, rad, inf)
+end
+
 ########################## Results #########################################
 
 abstract type LinearPotentialFlowResult end
@@ -90,6 +106,16 @@ end
 struct RadiationResult{P<:RadiationProblem} <: LinearPotentialFlowResult
     problem::P
     forces::NamedTuple
+end
+
+# Added mass and damping from a radiation solve (`A = Re(F)/ω²`, `B = Im(F)/ω`).
+# Keys match `res.forces` (dof symbols). Use the encountered frequency when `U ≠ 0`.
+function radiation_coefficients(res::RadiationResult)
+    ω = res.problem.forward_speed == 0 ? res.problem.omega : res.problem.encountered_omega
+    return (
+        added_mass = map(F -> real(F) / ω^2, res.forces),
+        radiation_damping = map(F -> imag(F) / ω, res.forces),
+    )
 end
 
 # Convert problem and forces for that problem into a results struct
@@ -270,7 +296,13 @@ end
 
 
 
-# Convert NameTuple of hydrodynamic coefficients into DimStack
+# Convert NameTuple of hydrodynamic coefficients into DimStack.
+# Dimension ticks are metadata (not differentiated). Coefficient arrays can be
+# Duals (ForwardDiff) or already-computed gradient arrays; wrap those the same way.
+_axis_val(x::ForwardDiff.Dual) = ForwardDiff.value(x)
+_axis_val(x::AbstractArray) = map(_axis_val, x)
+_axis_val(x) = x
+
 function create_DimStack(data::NamedTuple, parameters::NamedTuple, floatingbody::FloatingBody)
 
     added_mass_data = data.added_mass
@@ -279,61 +311,62 @@ function create_DimStack(data::NamedTuple, parameters::NamedTuple, floatingbody:
     Froude_Krylov_force_data = data.Froude_Krylov_force
     excitation_force_data = data.excitation_force    
     
-    omegas = parameters.wave_frequencies
-    betas = parameters.wave_directions
-    rad_dofs = parameters.radiating_dofs
-    if :influenced_dofs in keys(parameters)
-        inf_dofs = parameters.influenced_dofs
-    else
-        inf_dofs = collect(keys(floatingbody.dofs))
-    end
-    # Forward speed corrections
-    if :forward_speeds in keys(parameters)
-        forward_speeds = parameters.forward_speeds
-    else
-        forward_speeds = [0] # assume zero forward speed in not specified
-    end
-     
+    omegas = _axis_val(parameters.wave_frequencies)
+    inf_dofs = :influenced_dofs in keys(parameters) ?
+        collect(parameters.influenced_dofs) : collect(keys(floatingbody.dofs))
+    forward_speeds = _axis_val(get(parameters, :forward_speeds, [0]))
 
-    if forward_speeds == [0]
-        radiation_dims = (Dim{:influenced_dofs}(collect(inf_dofs)), 
-            Dim{:radiating_dofs}(collect(rad_dofs)),
-            Dim{:wave_frequencies}(omegas),
+    layers = NamedTuple()
+
+    if !isempty(added_mass_data)
+        rad_dofs = collect(parameters.radiating_dofs)
+        if forward_speeds == [0] || forward_speeds == [0.0]
+            radiation_dims = (Dim{:influenced_dofs}(inf_dofs),
+                Dim{:radiating_dofs}(rad_dofs),
+                Dim{:wave_frequencies}(omegas),
+                Dim{:forward_speeds}(forward_speeds))
+        else
+            betas = _axis_val(parameters.wave_directions)
+            radiation_dims = (Dim{:influenced_dofs}(inf_dofs),
+                Dim{:radiating_dofs}(rad_dofs),
+                Dim{:wave_frequencies}(omegas),
+                Dim{:forward_speeds}(forward_speeds),
+                Dim{:wave_directions}(betas))
+        end
+        layers = merge(layers, (
+            added_mass = DimArray(added_mass_data, radiation_dims),
+            radiation_damping = DimArray(radiation_damping_data, radiation_dims),
+        ))
+    end
+
+    if !isempty(diffraction_force_data)
+        betas = _axis_val(parameters.wave_directions)
+        diffraction_dims = (Dim{:influenced_dofs}(inf_dofs),
+            Dim{:wave_frequencies}(collect(omegas)),
+            Dim{:wave_directions}(betas),
             Dim{:forward_speeds}(forward_speeds))
-    else
-        radiation_dims = (Dim{:influenced_dofs}(collect(inf_dofs)), 
-            Dim{:radiating_dofs}(collect(rad_dofs)),
-            Dim{:wave_frequencies}(omegas),
-            Dim{:forward_speeds}(forward_speeds),
-            Dim{:wave_directions}(betas))
+        layers = merge(layers, (
+            excitation_force = DimArray(excitation_force_data, diffraction_dims),
+            diffraction_force = DimArray(diffraction_force_data, diffraction_dims),
+            Froude_Krylov_force = DimArray(Froude_Krylov_force_data, diffraction_dims),
+        ))
     end
 
-    diffraction_dims = (Dim{:influenced_dofs}(collect(inf_dofs)),
-        Dim{:wave_frequencies}(collect(omegas)),
-        Dim{:wave_directions}(betas),
-        Dim{:forward_speeds}(forward_speeds))
-
-
-    added_mass_array = DimArray(added_mass_data, radiation_dims)
-    radiation_damping_array = DimArray(radiation_damping_data, radiation_dims)
-    excitation_force_array = DimArray(excitation_force_data, diffraction_dims)
-    diffraction_force_array = DimArray(diffraction_force_data, diffraction_dims)
-    Froude_Krylov_force_array = DimArray(Froude_Krylov_force_data, diffraction_dims)
-
-
-    DimStack_of_data = DimStack((
-        added_mass = added_mass_array,
-        radiation_damping = radiation_damping_array,
-        excitation_force = excitation_force_array,
-        diffraction_force = diffraction_force_array,
-        Froude_Krylov_force = Froude_Krylov_force_array))
-    return DimStack_of_data 
+    return DimStack(layers)
 end
 
+# Same as `create_DimStack`: attach DimensionalData labels after AD.
+# Reverse-mode engines should differentiate `compute_hydrodynamic_coefficients`
+# (NamedTuple of arrays), then label both the primal and the ∂ arrays here.
+const label_hydrodynamic_coefficients = create_DimStack
 
 
-# Compute NamedTuple of of results (with keys added_mass, ...)
-# This is differentiable
+
+# Compute NamedTuple of results (keys added_mass, radiation_damping, …).
+# Differentiable for ForwardDiff (ω, Dual geometry) and for Enzyme reverse
+# on a StaticArraysMesh FloatingBody if the loss is a scalar from these arrays.
+# Do not differentiate `compute_and_label_hydrodynamic_coefficients`: wrap
+# these arrays with `create_DimStack` / `label_hydrodynamic_coefficients` after AD.
 function compute_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody; direct::Bool=true, gf::String="Wu", greens_functions=nothing)
     problems = problems_from_data(parameters, floatingbody)
     results = solve_all_problems(problems; direct=direct, gf=gf, greens_functions=greens_functions)
@@ -341,7 +374,8 @@ function compute_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody:
     return data
 end
 
-# This is NOT differentiable (as is) due to DimStack 
+# Labels coefficient arrays. Reverse-mode AD should run on
+# `compute_hydrodynamic_coefficients` and then call this on the primal and on ∂data.
 function compute_and_label_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody; direct::Bool=true, gf::String="Wu", greens_functions=nothing)
     data = compute_hydrodynamic_coefficients(parameters, floatingbody; direct=direct, gf=gf, greens_functions=greens_functions)
     DimStack_of_data = create_DimStack(data, parameters, floatingbody)

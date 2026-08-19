@@ -1,5 +1,6 @@
-# Below are several variants of the same function.
-# TODO: refactor with multiple dispatch?
+# Comprehension is the Zygote / Dual-geometry / `all_normals` path. Do not fold
+# it into the StaticArraysMesh CPU kernels: those mutate and are not Zygote-safe.
+# Public `assemble_matrices` dispatches on mesh / array / Green's-function types.
 
 function assemble_matrices_comprehension(green_functions, mesh, wavenumber; direct=true, all_normals=nothing, include_identity=true)
     
@@ -34,8 +35,8 @@ function assemble_matrices_comprehension(green_functions, mesh, wavenumber; dire
 end
 
 function assemble_matrices_explicit_both(green_functions, mesh, wavenumber; direct=true)
-    # Variant of the above using `both_integral_and_integral_gradient`
-    # Probably not differentiable with Zygote
+    # Benchmark-only variant using `both_integral_and_integral_gradient`.
+    # Not on the `assemble_matrices` dispatch path; not Zygote-safe.
     S = Array{ComplexF64, 2}(undef, (mesh.nfaces, mesh.nfaces))
     D = Array{ComplexF64, 2}(undef, (mesh.nfaces, mesh.nfaces))
     for i in 1:mesh.nfaces
@@ -146,57 +147,73 @@ Assembles the influence matrices based on the tuple of provided Green's function
 # Returns
 - A tuple of assembled matrices. S and (D or K) depending on the flag.
 """
-# Default: comprehension is Zygote-friendly on dense `Mesh`.
-# `StaticArraysMesh` uses broadcasting so `arrtype=CuArray` (or a `CuArray` of
-# elements) autodispatches to the GPU path.
+# Dispatch on the incoming types. Each backend is a different AD / hardware
+# constraint, not a duplicate of the same loop:
+#   Mesh (incl. Dual vertices, `all_normals`) → comprehension
+#   StaticArraysMesh + `arrtype ≠ Array`      → broadcasting (GPU)
+#   AbstractVector of elements                → broadcasting (already uploaded)
+#   StaticArraysMesh CPU                      → `_assemble_cpu` on the GF tuple
+#     Tuple{Rankine, RankineReflected, GFWu}  → Birk Rankine + Wu centers
+#     Tuple{Rankine, RankineReflected}        → Birk Rankine
+#     Tuple{GFWu}                             → Wu centers
+#     other tuples / vectors                  → partition static vs wave, then
+#                                               Birk / Wu / broadcasting
 assemble_matrices(green_functions, mesh, wavenumber; kwargs...) =
     assemble_matrices_comprehension(green_functions, mesh, wavenumber; kwargs...)
 
-function assemble_matrices(green_functions, mesh::StaticArraysMesh, wavenumber; direct=true, arrtype=Array, all_normals=nothing, include_identity=true)
+function assemble_matrices(green_functions, mesh::StaticArraysMesh, wavenumber;
+        direct=true, arrtype=Array, all_normals=nothing, include_identity=true)
     if !isnothing(all_normals)
         error("all_normals is not supported on the broadcasting / GPU assembly path; use a dense Mesh.")
     end
     arrtype === Array || return assemble_matrices_broadcasting(green_functions, mesh, wavenumber; direct, arrtype, include_identity)
-    return assemble_vectorized(green_functions, mesh, wavenumber; direct, include_identity)
+    return _assemble_cpu(green_functions, mesh, wavenumber; direct, include_identity)
 end
 
-# Split k-independent Rankine from the wave term, precompute source-panel Birk
-# frames once per column, and evaluate S and D from the same pair kernel.
-# Geometry is Float64 on this path; Zygote d/dω only needs the wave broadcast.
-function assemble_vectorized(green_functions::Tuple{Rankine, RankineReflected, GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    SD = ChainRulesCore.ignore_derivatives() do
-        assemble_birk_rankine((Rankine(), RankineReflected()), mesh; direct, include_identity)
-    end
+assemble_matrices(green_functions, elements::AbstractVector, wavenumber; kwargs...) =
+    assemble_matrices_broadcasting(green_functions, elements, wavenumber; kwargs...)
+
+# CPU StaticArraysMesh. Concrete GF tuples skip `partition_greens_functions`.
+# Mutating loops here are Enzyme/ForwardDiff-safe; Zygote should use dense Mesh.
+function _assemble_cpu(gfs::Tuple{Rankine, RankineReflected, GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
+    SD = assemble_birk_rankine((Rankine(), RankineReflected()), mesh; direct, include_identity)
     Sw, Dw = assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity=false)
     return SD[1] .+ Sw, SD[2] .+ Dw
 end
 
-function assemble_vectorized(green_functions::Tuple{Rankine, RankineReflected}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    return ChainRulesCore.ignore_derivatives() do
-        assemble_birk_rankine(green_functions, mesh; direct, include_identity)
-    end
+function _assemble_cpu(gfs::Tuple{Rankine, RankineReflected}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
+    return assemble_birk_rankine(gfs, mesh; direct, include_identity)
 end
 
-function assemble_vectorized(green_functions, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
+function _assemble_cpu(gfs::Tuple{GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
+    return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity)
+end
+
+function _assemble_cpu(green_functions, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
     gfs = green_functions isa Tuple ? green_functions : (green_functions...,)
     static_gfs, wave_gfs = partition_greens_functions(gfs)
-    SD_static = ChainRulesCore.ignore_derivatives() do
-        isempty(static_gfs) ? nothing : assemble_static_vectorized(static_gfs, mesh; direct, include_identity)
-    end
+    SD_static = isempty(static_gfs) ? nothing : _assemble_static_cpu(static_gfs, mesh; direct, include_identity)
     if isempty(wave_gfs)
         return SD_static
     end
     wave_identity = isnothing(SD_static) && include_identity
-    Sw, Dw = assemble_wave_vectorized(wave_gfs, mesh, wavenumber; direct, include_identity=wave_identity)
+    Sw, Dw = _assemble_wave_cpu(wave_gfs, mesh, wavenumber; direct, include_identity=wave_identity)
     isnothing(SD_static) && return Sw, Dw
     return SD_static[1] .+ Sw, SD_static[2] .+ Dw
 end
 
-function assemble_static_vectorized(gfs::Tuple, mesh::StaticArraysMesh; direct=true, include_identity=true)
-    if _birk_rankine_tuple(gfs)
-        return assemble_birk_rankine(gfs, mesh; direct, include_identity)
-    end
-    return assemble_matrices_broadcasting(gfs, mesh, 0.0; direct, include_identity)
+function _assemble_static_cpu(gfs::Tuple, mesh::StaticArraysMesh; direct=true, include_identity=true)
+    _birk_rankine_tuple(gfs) || return assemble_matrices_broadcasting(gfs, mesh, 0.0; direct, include_identity)
+    return assemble_birk_rankine(gfs, mesh; direct, include_identity)
+end
+
+function _assemble_wave_cpu(gfs::Tuple{GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
+    return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity)
+end
+
+function _assemble_wave_cpu(gfs::Tuple, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
+    length(gfs) == 1 && gfs[1] isa GFWu && return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity)
+    return assemble_matrices_broadcasting(gfs, mesh, wavenumber; direct, include_identity)
 end
 
 _birk_rankine_tuple(gfs::Tuple) = all(_is_birk_rankine, gfs)
@@ -205,22 +222,14 @@ _is_birk_rankine(::RankineReflected) = true
 _is_birk_rankine(::RankineReflectedNegative) = true
 _is_birk_rankine(::GreensFunction) = false
 
-function assemble_wave_vectorized(gfs::Tuple{GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity)
-end
-
-function assemble_wave_vectorized(gfs::Tuple, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    length(gfs) == 1 && gfs[1] isa GFWu && return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity)
-    return assemble_matrices_broadcasting(gfs, mesh, wavenumber; direct, include_identity)
-end
-
 @inline function _face_smatrix(mesh::StaticArraysMesh, j)
     f = mesh.faces[j]
     v1 = mesh.vertices[f[1]]
     v2 = mesh.vertices[f[2]]
     v3 = mesh.vertices[f[3]]
     v4 = mesh.vertices[f[4]]
-    return SMatrix{4,3,Float64,12}(
+    T = eltype(v1)
+    return SMatrix{4,3,T,12}(
         v1[1], v2[1], v3[1], v4[1],
         v1[2], v2[2], v3[2], v4[2],
         v1[3], v2[3], v3[3], v4[3],
@@ -244,12 +253,15 @@ function assemble_birk_rankine(gfs::Tuple, mesh::StaticArraysMesh; direct=true, 
     need_I = any(gf -> gf isa RankineReflected, gfs)
     need_N = any(gf -> gf isa RankineReflectedNegative, gfs)
     image = need_I | need_N
-    image_sign = (need_I ? 1.0 : 0.0) + (need_N ? -1.0 : 0.0)
 
+    GT = eltype(eltype(centers))
+    scale = convert(GT, -1 / 4π)
+    image_sign = convert(GT, (need_I ? 1 : 0) + (need_N ? -1 : 0))
+    S = Matrix{Complex{GT}}(undef, n, n)
+    D = Matrix{Complex{GT}}(undef, n, n)
     geoms = [_source_birk_geom(mesh, j) for j in 1:n]
-    scale = -1 / 4π
-    S = Matrix{ComplexF64}(undef, n, n)
-    D = Matrix{ComplexF64}(undef, n, n)
+    z = zero(GT)
+    half = convert(GT, 0.5)
     @inbounds for j in 1:n
         c2 = centers[j]
         r2 = radii[j]
@@ -260,8 +272,8 @@ function assemble_birk_rankine(gfs::Tuple, mesh::StaticArraysMesh; direct=true, 
         for i in 1:n
             c1 = centers[i]
             nvec = direct ? n2 : normals[i]
-            s = 0.0
-            d = 0.0
+            s = z
+            d = z
             if need_R
                 φ, gsrc = _vrankine_from_geom(c1, c2, r2, a2, Tmat, qgc, lc)
                 g = direct ? gsrc : -gsrc
@@ -285,7 +297,7 @@ function assemble_birk_rankine(gfs::Tuple, mesh::StaticArraysMesh; direct=true, 
     end
     if include_identity
         @inbounds for i in 1:n
-            D[i, i] += 0.5
+            D[i, i] += half
         end
     end
     return S, D
@@ -296,21 +308,17 @@ function assemble_wu_centers(mesh::StaticArraysMesh, wavenumber; direct=true, in
 end
 
 function assemble_wu_centers(mesh::StaticArraysMesh, wavenumber, ::Val{direct}; include_identity=true) where {direct}
-    _assemble_wu_centers_fused(mesh, wavenumber, Val(direct), include_identity)
+    _assemble_wu_centers_loop(mesh, wavenumber, Val(direct), include_identity)
 end
 
-# Fused S/D primal. ForwardDiff seeds Dual into `k` and runs this loop.
-# Zygote uses the rrule below (mutation is not on the reverse tape).
-function _assemble_wu_centers_fused(mesh, k, direct::Val, include_identity::Bool)
-    _assemble_wu_centers_loop(mesh, k, direct, include_identity)
-end
-
+# Fused S/D primal. No assemble rrule: ForwardDiff Duals and Enzyme/Mooncake
+# reverse trace this mutating loop (k and geometry). Zygote cannot.
 function _assemble_wu_centers_loop(mesh, k, ::Val{direct}, include_identity::Bool) where {direct}
     n = mesh.nfaces
     centers = mesh.centers
     areas = mesh.areas
     normals = mesh.normals
-    RT = typeof(float(real(k)))
+    RT = promote_type(typeof(float(real(k))), eltype(areas))
     T = Complex{RT}
     scale = convert(T, -1 / 4π)
     S = Matrix{T}(undef, n, n)
@@ -335,53 +343,40 @@ function _assemble_wu_centers_loop(mesh, k, ::Val{direct}, include_identity::Boo
     return S, D
 end
 
-@inline function _real_inner(Ā, A)
-    Ā isa AbstractZero && return zero(real(A[1])) * false
-    s = zero(real(A[1])) * zero(real(first(Ā)))
-    @inbounds for i in eachindex(A)
-        gi = Ā[i]
-        ai = A[i]
-        s += real(gi) * real(ai) + imag(gi) * imag(ai)
-    end
-    return s
-end
-
-function ChainRulesCore.rrule(::typeof(_assemble_wu_centers_fused), mesh, k, direct::Val, include_identity::Bool)
-    y = _assemble_wu_centers_loop(mesh, k, direct, include_identity)
-    function assemble_wu_centers_pullback(ȳ)
-        ȳu = unthunk(ȳ)
-        if ȳu isa AbstractZero
-            return (NoTangent(), NoTangent(), zero(k), NoTangent(), NoTangent())
-        end
-        S̄ = unthunk(ȳu[1])
-        D̄ = unthunk(ȳu[2])
-        ∂k = ForwardDiff.derivative(k) do κ
-            S, D = _assemble_wu_centers_loop(mesh, κ, direct, include_identity)
-            _real_inner(S̄, S) + _real_inner(D̄, D)
-        end
-        return (NoTangent(), NoTangent(), ∂k, NoTangent(), NoTangent())
-    end
-    return y, assemble_wu_centers_pullback
-end
-
 
 function assemble_matrix_wu(mesh, wavenumber; direct=true, all_normals=nothing)
     return assemble_matrices((Rankine(), RankineReflected(), GFWu()), mesh, wavenumber; direct, all_normals)
 end
 
 
-# ImplicitAD is CPU / Zygote reverse-mode. Dual numbers use native `\`
-# (ForwardDiff). GPU arrays use `gpu_linsolve` (cuSOLVER + explicit rrule).
-# Do not replace `implicit_linear` with `\` for Array — Zygote cannot
-# reverse dense LU without that implicit function theorem wrapper.
+# Array matvec is a comprehension so Enzyme reverse does not enter BLAS `*`.
+# Reverse VJP is in ReverseAD (same as Zygote: ȳ bc', S' ȳ).
+function _mulvec(S::Array, bc::AbstractVector)
+    n = length(bc)
+    T = promote_type(eltype(S), eltype(bc))
+    return T[sum(S[i, j] * bc[j] for j in 1:n) for i in 1:n]
+end
+_mulvec(S, bc) = S * bc
+
+# Dual numbers use native `\` (ForwardDiff). CPU Array uses LinearSolve
+# LUFactorization. Reverse of that solve is the IFT in ReverseAD (same VJP
+# as Zygote; adjoint `y'`). GPU arrays use `gpu_linsolve`.
 function linsolve(A, b)
     if eltype(real(A)) <: ForwardDiff.Dual
         return A \ b
     elseif A isa Array
-        return implicit_linear(A, b)
+        return _linearsolve(A, b)
     else
         return gpu_linsolve(A, b)
     end
+end
+
+# Primal LinearSolve. Use the returned `sol.u` (SciML/LinearSolve.jl#479).
+# Enzyme/Zygote never differentiate this body: ReverseAD intercepts
+# `_linearsolve` and runs IFT with primal solves only.
+function _linearsolve(A, b)
+    sol = LinearSolve.solve(LinearSolve.LinearProblem(A, b), LinearSolve.LUFactorization())
+    return sol.u
 end
 
 gpu_linsolve(A, b) = _backend_ldiv(A, b)
@@ -402,28 +397,14 @@ function _uses_device_ldiv(A)
     return string(nameof(typeof(A))) == "CuArray"
 end
 
-function ChainRulesCore.rrule(::typeof(gpu_linsolve), A, b)
-    x = _backend_ldiv(A, b)
-    function gpu_linsolve_pullback(ȳ)
-        ȳu = unthunk(ȳ)
-        if ȳu isa AbstractZero
-            return (NoTangent(), ZeroTangent(), ZeroTangent())
-        end
-        λ = _backend_ldiv(A', ȳu)
-        return (NoTangent(), -λ * x', λ)
-    end
-    return x, gpu_linsolve_pullback
-end
-
-
 function solve(D, S, bc; direct::Bool=true)
     if direct
-        ϕ = linsolve(D,S*bc)
+        ϕ = linsolve(D, _mulvec(S, bc))
         sources = nothing
     else
         K = D
-        sources = linsolve(K,bc)
-        ϕ = S * sources
+        sources = linsolve(K, bc)
+        ϕ = _mulvec(S, sources)
     end
     return ϕ, sources
 end

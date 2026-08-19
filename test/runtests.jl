@@ -27,6 +27,7 @@ end
     include("./greens_function_differentiation.jl")
     include("./matrix_assembly.jl")
     include("./matrix_assembly_differentiation.jl")
+    include("./ad_rules_geometry.jl")
     include("./consistency_with_analytical_solutions.jl")
     include("./outputs_differentiation.jl")
     include("./solve_problem_differentiation.jl")

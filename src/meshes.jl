@@ -34,15 +34,15 @@ struct Mesh{T, VT<:AbstractMatrix, FT<:AbstractMatrix, CT<:AbstractMatrix, NT<:A
     end
 end
 
-struct StaticArraysMesh
-    vertices::Vector{SVector{3, Float64}}
-    faces::Vector{SVector{4, Int64}}
-    centers::Vector{SVector{3, Float64}}
-    normals::Vector{SVector{3, Float64}}
-    areas::Vector{Float64}
-    radii::Vector{Float64}
-    nvertices::Int64
-    nfaces::Int64
+struct StaticArraysMesh{T}
+    vertices::Vector{SVector{3, T}}
+    faces::Vector{SVector{4, Int}}
+    centers::Vector{SVector{3, T}}
+    normals::Vector{SVector{3, T}}
+    areas::Vector{T}
+    radii::Vector{T}
+    nvertices::Int
+    nfaces::Int
 end
 
 
@@ -137,10 +137,17 @@ function StaticArraysMesh(mesh::PyObject)
 end
 
 # `Mesh` stores 0-based faces (Capytaine convention). StaticArraysMesh is 1-based.
-function StaticArraysMesh(mesh::Mesh)
+# Dual eltypes stay Dual (ForwardDiff through Capytaine meshers seeds Dual fields
+# in GeometryAD). Enzyme reverse uses `_mesh_to_smesh`, not the conversion loop.
+function _mesh_eltype(mesh::Mesh)
+    T = eltype(mesh.vertices)
+    return T <: AbstractFloat ? float(T) : T
+end
+
+@noinline function _mesh_to_smesh_impl(mesh::Mesh)
     nv = Int(mesh.nvertices)
     nf = Int(mesh.nfaces)
-    T = float(eltype(mesh.vertices))
+    T = _mesh_eltype(mesh)
     vertices = [SVector{3,T}(mesh.vertices[i, 1], mesh.vertices[i, 2], mesh.vertices[i, 3]) for i in 1:nv]
     faces = [SVector{4,Int}(mesh.faces[i, 1] + 1, mesh.faces[i, 2] + 1, mesh.faces[i, 3] + 1, mesh.faces[i, 4] + 1) for i in 1:nf]
     centers = [SVector{3,T}(mesh.centers[i, 1], mesh.centers[i, 2], mesh.centers[i, 3]) for i in 1:nf]
@@ -148,6 +155,39 @@ function StaticArraysMesh(mesh::Mesh)
     return StaticArraysMesh(vertices, faces, centers, normals,
         T[mesh.areas[i] for i in 1:nf], T[mesh.radii[i] for i in 1:nf], nv, nf)
 end
+
+@noinline _mesh_to_smesh(mesh::Mesh) = _mesh_to_smesh_impl(mesh)
+
+StaticArraysMesh(mesh::Mesh) = _mesh_to_smesh(mesh)
+
+"""
+    smesh(mesh)
+
+Convert a dense `Mesh` to `StaticArraysMesh`. Same primal as
+`StaticArraysMesh(mesh)`; this is the call Enzyme reverse-mode intercepts.
+"""
+smesh(mesh::Mesh) = _mesh_to_smesh(mesh)
+smesh(mesh::StaticArraysMesh) = mesh
+
+# Enzyme reverse of `fd_mesh_rules!` mesher functions returns a Duplicated
+# `StaticArraysMesh` (opaque shadow). The assemble loops crash on that
+# ("illegal insertion": Float vs Pointer). Rebuilding the struct from its
+# fields is the same construction as `smesh_from_radius`, which Enzyme
+# already reverses through `solve_problem`. StaticArrays themselves are fine.
+function _repack_smesh(s::StaticArraysMesh)
+    z = zero(eltype(s.areas))
+    return StaticArraysMesh(
+        [v .+ z for v in s.vertices],
+        s.faces,
+        [c .+ z for c in s.centers],
+        [n .+ z for n in s.normals],
+        [a + z for a in s.areas],
+        [ρ + z for ρ in s.radii],
+        s.nvertices,
+        s.nfaces,
+    )
+end
+_repack_smesh(mesh) = mesh
 
 # Concrete floating-point meshes can use the allocation-free StaticElement path.
 # Dual / Number meshes stay on LazyElement so geometry AD still sees `mesh.vertices`.
@@ -207,12 +247,12 @@ end
 
 
 # When using a StaticArraysMesh, the element is stored as a set of static arrays (although LazyElement might also work)
-struct StaticElement
-    center::SVector{3, Float64}
-    vertices::SMatrix{4, 3, Float64, 12}
-    normal::SVector{3, Float64}
-    area::Float64
-    radius::Float64
+struct StaticElement{T}
+    center::SVector{3, T}
+    vertices::SMatrix{4, 3, T, 12}
+    normal::SVector{3, T}
+    area::T
+    radius::T
 end
 
 function element(mesh::StaticArraysMesh, J::Int)
@@ -254,11 +294,11 @@ function vertices(e::ReflectedElement{T} where T <: Union{NamedTuple, LazyElemen
     )   # Inverting order such that order is still consistent with normal vector
 end
 
-center(e::ReflectedElement{StaticElement}) = (c = center(e.element); SVector(c[1], c[2], -c[3]))
-normal(e::ReflectedElement{StaticElement}) = (n = normal(e.element); SVector(n[1], n[2], -n[3]))
-area(e::ReflectedElement{StaticElement}) = area(e.element)
-radius(e::ReflectedElement{StaticElement}) = radius(e.element)
-function vertices(e::ReflectedElement{StaticElement})
+center(e::ReflectedElement{<:StaticElement}) = (c = center(e.element); SVector(c[1], c[2], -c[3]))
+normal(e::ReflectedElement{<:StaticElement}) = (n = normal(e.element); SVector(n[1], n[2], -n[3]))
+area(e::ReflectedElement{<:StaticElement}) = area(e.element)
+radius(e::ReflectedElement{<:StaticElement}) = radius(e.element)
+function vertices(e::ReflectedElement{<:StaticElement})
     v = vertices(e.element)
     return @SMatrix [
         v[4, 1] v[4, 2] -v[4, 3]

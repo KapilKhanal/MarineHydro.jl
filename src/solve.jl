@@ -1,12 +1,14 @@
 
 
-# Place hull BCs onto hull+lid without setindex! (Zygote cannot mutate arrays).
+# Place hull BCs onto hull+lid without setindex! (Zygote) and without BLAS
+# `ger` (Enzyme reverse cannot load `zger_64_` on some platforms).
 function _pad_hull_bc(bc_on_hull, hull_mask)
     v = vec(bc_on_hull)
     n = length(hull_mask)
     length(v) == n && return v
+    T = eltype(v)
     idx = findall(hull_mask)
-    return Matrix{eltype(v)}(I, n, n)[:, idx] * v
+    return T[sum(i == idx[k] ? v[k] : zero(T) for k in eachindex(idx)) for i in 1:n]
 end
 
 function default_greens_functions(gf::String)
@@ -38,12 +40,9 @@ function _mesh_including_lid(problem)
     return mesh, hull_mask
 end
 
-# Primal Float64 solves use StaticArraysMesh broadcasting (Capytaine-class panel loops).
-# Dual / Number meshes stay dense so Zygote can see `mesh.vertices`.
-# `all_normals` (forward speed) is only implemented on the dense path.
-_assembly_mesh(mesh::Mesh) = ChainRulesCore.ignore_derivatives() do
-    _concrete_float_mesh(mesh) ? StaticArraysMesh(mesh) : mesh
-end
+# Use the mesh already on the body. `FloatingBody{<:Mesh}` stays on the dense
+# comprehension path; `FloatingBody{<:StaticArraysMesh}` uses the vectorized
+# kernels. Convert once when you build the body — not inside the solve.
 _assembly_mesh(mesh) = mesh
 
 # Add a precomputed Rankine (k-independent) pair to the wave-only assembly.

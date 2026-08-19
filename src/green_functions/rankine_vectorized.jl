@@ -200,76 +200,8 @@ function velocity_hessian(x, y, z, local_corners)
     return (-1 / 4π) .* sum(contribs)
 end
 
-function _flatten_corners(local_corners)
-    return SVector{12}(
-        local_corners[1][1], local_corners[1][2], local_corners[1][3],
-        local_corners[2][1], local_corners[2][2], local_corners[2][3],
-        local_corners[3][1], local_corners[3][2], local_corners[3][3],
-        local_corners[4][1], local_corners[4][2], local_corners[4][3],
-    )
-end
-
-function _unflatten_corners(v)
-    return (
-        SVector(v[1], v[2], v[3]),
-        SVector(v[4], v[5], v[6]),
-        SVector(v[7], v[8], v[9]),
-        SVector(v[10], v[11], v[12]),
-    )
-end
-
-# Geometry (panel corners) has no closed-form Birk derivative; fill those
-# cotangents with ForwardDiff through the primal. Duals take the primal path,
-# so these pullbacks do not recurse into the rrules below.
-function _potential_corners_adjoint(ȳ, x, y, z, local_corners)
-    g = ForwardDiff.gradient(_flatten_corners(local_corners)) do v
-        return velocity_potential(x, y, z, _unflatten_corners(v))
-    end
-    return _unflatten_corners(ȳ .* g)
-end
-
-function _velocity_corners_adjoint(ȳ, x, y, z, local_corners)
-    J = ForwardDiff.jacobian(_flatten_corners(local_corners)) do v
-        return velocity_derivatives(x, y, z, _unflatten_corners(v))
-    end
-    return _unflatten_corners(J' * ȳ)
-end
-
-function _cotangent_svector(ȳ)
-    ȳu = unthunk(ȳ)
-    return SVector{3}(ȳu[1], ȳu[2], ȳu[3])
-end
-
-# Zygote / ChainRules: dφ/d(x,y,z) is the analytic Birk velocity (eqs. 47–49).
-function ChainRulesCore.rrule(::typeof(velocity_potential), x, y, z, local_corners)
-    φ = velocity_potential(x, y, z, local_corners)
-    v = velocity_derivatives(x, y, z, local_corners)
-    function velocity_potential_pullback(ȳ)
-        if ȳ isa AbstractZero
-            return (NoTangent(), ZeroTangent(), ZeroTangent(), ZeroTangent(), ZeroTangent())
-        end
-        ȳu = unthunk(ȳ)
-        Δcorners = _potential_corners_adjoint(ȳu, x, y, z, local_corners)
-        return (NoTangent(), ȳu * v[1], ȳu * v[2], ȳu * v[3], Δcorners)
-    end
-    return φ, velocity_potential_pullback
-end
-
-# Zygote / ChainRules: dv/d(x,y,z) is the analytic Birk Hessian (eqs. 50–58).
-function ChainRulesCore.rrule(::typeof(velocity_derivatives), x, y, z, local_corners)
-    v = velocity_derivatives(x, y, z, local_corners)
-    H = velocity_hessian(x, y, z, local_corners)
-    function velocity_derivatives_pullback(ȳ)
-        if ȳ isa AbstractZero
-            return (NoTangent(), ZeroTangent(), ZeroTangent(), ZeroTangent(), ZeroTangent())
-        end
-        ȳv = _cotangent_svector(ȳ)
-        gx = H' * ȳv
-        Δcorners = _velocity_corners_adjoint(ȳv, x, y, z, local_corners)
-        return (NoTangent(), gx[1], gx[2], gx[3], Δcorners)
-    end
-    return v, velocity_derivatives_pullback
-end
+# Reverse rules (Zygote ChainRules + EnzymeRules, including ForwardDiff
+# corner VJPs) live in `ReverseAD` (`src/ad_rules.jl`).
 
 # Source-panel frame is independent of the field point: assemble once per column.
 @inline function _vrankine_from_geom(point, source_point, source_radius, source_area, Tmat, qgc, local_corners)

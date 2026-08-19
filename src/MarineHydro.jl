@@ -5,10 +5,10 @@ using ForwardDiff
 using StaticArrays
 using LinearAlgebra
 using LinearAlgebra: cross, dot, norm
-using ImplicitAD: implicit_linear
 using DimensionalData
 using ChainRulesCore
 using KernelAbstractions
+import LinearSolve
 
 const τ̅ = 2π
 
@@ -26,17 +26,14 @@ export RankineReflected, DelhommeauRankineReflected
 include("green_functions/rankine_reflected_negative.jl")
 export RankineReflectedNegative, DelhommeauRankineReflectedNegative
 
-# Temporary aliases: VRankine is now Rankine.
-Base.@deprecate_binding VRankine Rankine
-Base.@deprecate_binding VRankineReflected RankineReflected
-export VRankine, VRankineReflected
+
 include("green_functions/wu.jl")
 export GFWu
 include("green_functions/exact_Guevel_Delhommeau.jl")
 export ExactGuevelDelhommeau
 
 include("meshes.jl")
-export Mesh, StaticArraysMesh, element, combine_meshes, +, wavebot_mesh
+export Mesh, StaticArraysMesh, smesh, element, combine_meshes, +, wavebot_mesh
 
 include("bodies.jl")
 export FloatingBody, combine_floatingbodies, +
@@ -44,11 +41,12 @@ export FloatingBody, combine_floatingbodies, +
 include("problems_and_results.jl")
 export LinearPotentialFlowProblem, DiffractionProblem, RadiationProblem
 export LinearPotentialFlowResult, DiffractionResult, RadiationResult
+export radiation_coefficients
 export make_result, problems_from_data, assemble_hydrodynamic_coefficients
-export create_DimStack, compute_hydrodynamic_coefficients, compute_and_label_hydrodynamic_coefficients
+export create_DimStack, label_hydrodynamic_coefficients, compute_hydrodynamic_coefficients, compute_and_label_hydrodynamic_coefficients
 
 include("matrix_assembly.jl")
-export assemble_matrices, assemble_matrices_broadcasting, assemble_matrices_ka, assemble_matrix_wu, solve, assemble_matrix_ExactGuevelDelhommeau
+export assemble_matrices, assemble_matrices_broadcasting, assemble_matrices_ka, assemble_matrix_wu, solve
 
 include("waves.jl")
 export FroudeKrylovForce, AiryBC, airy_waves_pressure, airy_waves_velocity,airy_waves_potential
@@ -57,5 +55,10 @@ export calculate_radiation_forces, DiffractionForce, diffraction_force
 
 include("solve.jl")
 export solve_problem, solve_all_problems
+
+include("ad_rules.jl")
+include("ad_rules_geometry.jl")
+using .GeometryAD: fd_mesh_rules!, fd_mesh_function, make_sphere_mesher, sphere_mesh
+export fd_mesh_rules!, fd_mesh_function, make_sphere_mesher, sphere_mesh
 
 end

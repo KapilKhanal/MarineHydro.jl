@@ -22,15 +22,29 @@ function radiation_bc(mesh::Mesh, dof, omega)
     return @inbounds [scale * (mesh.normals[i, 1] * d1 + mesh.normals[i, 2] * d2 + mesh.normals[i, 3] * d3) for i in 1:nfaces]
 end
 
+function radiation_bc(mesh::StaticArraysMesh, dof, omega)
+    d1, d2, d3 = dof[1], dof[2], dof[3]
+    scale = -1im * omega
+    return [scale * (n[1] * d1 + n[2] * d2 + n[3] * d3) for n in mesh.normals]
+end
+
 function integrate_pressure(mesh::Mesh, pressure, dof)
     normal_dof_amp = -sum(transpose(dof) .* mesh.normals, dims=2)
     forces = sum(pressure .* normal_dof_amp .* mesh.areas)
     return forces
 end
 
+function integrate_pressure(mesh::StaticArraysMesh, pressure, dof)
+    d1, d2, d3 = dof[1], dof[2], dof[3]
+    s = zero(promote_type(eltype(pressure), eltype(mesh.areas)))
+    @inbounds for i in 1:mesh.nfaces
+        n = mesh.normals[i]
+        s += pressure[i] * -(d1 * n[1] + d2 * n[2] + d3 * n[3]) * mesh.areas[i]
+    end
+    return s
+end
 
-  
-function calculate_radiation_forces(mesh::Mesh, dof, omega)
+function calculate_radiation_forces(mesh, dof, omega)
     k = omega^2 / SETTINGS.g
     S, D = assemble_matrix_wu(mesh, k)
     bc = radiation_bc(mesh, dof, omega)
@@ -134,15 +148,26 @@ function integrate_pressure(floatingbody::FloatingBody, influenced_dofs::Vector{
     mesh = floatingbody.mesh
 
     force_values = [
-        let
-            dof_mat = floatingbody.dofs[dof_symbol]
-            normal_dof_amp_on_face = -sum(dof_mat .* mesh.normals, dims=2)
-            sum(pressure .* normal_dof_amp_on_face .* mesh.areas)
-        end 
+        _integrate_dof_pressure(mesh, floatingbody.dofs[dof_symbol], pressure)
         for dof_symbol in influenced_dofs
     ]
     forces = NamedTuple{Tuple(influenced_dofs)}(Tuple(force_values))
     return forces
+end
+
+function _integrate_dof_pressure(mesh::Mesh, dof_mat, pressure)
+    normal_dof_amp_on_face = -sum(dof_mat .* mesh.normals, dims=2)
+    return sum(pressure .* normal_dof_amp_on_face .* mesh.areas)
+end
+
+function _integrate_dof_pressure(mesh::StaticArraysMesh, dof_mat, pressure)
+    s = zero(promote_type(eltype(pressure), eltype(mesh.areas), eltype(dof_mat)))
+    @inbounds for i in 1:mesh.nfaces
+        n = mesh.normals[i]
+        disp = dof_mat[i, 1] * n[1] + dof_mat[i, 2] * n[2] + dof_mat[i, 3] * n[3]
+        s += pressure[i] * -disp * mesh.areas[i]
+    end
+    return s
 end
 
 ################################ Radiation methods #########################################
@@ -155,15 +180,27 @@ function radiation_bc(problem::RadiationProblem)
     # Returns
     - The (Neumann) radiation boundary condition values for each panel.
 """
+    mesh = problem.floatingbody.mesh
     dof_mat = problem.floatingbody.dofs[problem.radiating_dof]
-    displacement_on_face = sum(problem.floatingbody.mesh.normals .* dof_mat, dims=2)
+    displacement_on_face = _normal_displacement(mesh, dof_mat)
     bc =  -1im .* problem.encountered_omega .* displacement_on_face
     if problem.forward_speed!=0
-        ddofdx = evaluate_gradient_of_motion(problem.floatingbody.mesh, string(problem.radiating_dof))
-        ddofdx_dot_n = sum(ddofdx .* problem.floatingbody.mesh.normals, dims=2)
-        bc = bc .+ problem.forward_speed .* ddofdx_dot_n
+        ddofdx = evaluate_gradient_of_motion(mesh, string(problem.radiating_dof))
+        bc = bc .+ problem.forward_speed .* _normal_displacement(mesh, ddofdx)
     end
     return bc
+end
+
+_normal_displacement(mesh::Mesh, dof_mat) = sum(mesh.normals .* dof_mat, dims=2)
+
+function _normal_displacement(mesh::StaticArraysMesh, dof_mat)
+    T = promote_type(eltype(mesh.areas), eltype(dof_mat))
+    out = Vector{T}(undef, mesh.nfaces)
+    @inbounds for i in 1:mesh.nfaces
+        n = mesh.normals[i]
+        out[i] = n[1] * dof_mat[i, 1] + n[2] * dof_mat[i, 2] + n[3] * dof_mat[i, 3]
+    end
+    return out
 end
 
 function compute_bc(problem::RadiationProblem)
