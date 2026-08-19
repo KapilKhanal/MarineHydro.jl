@@ -95,6 +95,36 @@ function RadiationProblem(floatingbody::FloatingBody, omega;
     return RadiationProblem(floatingbody, omega, beta, k, forward_speed, rad, inf)
 end
 
+function remake(prob::RadiationProblem; kwargs...)
+    floatingbody = get(kwargs, :floatingbody, prob.floatingbody)
+    omega = get(kwargs, :omega, prob.omega)
+    forward_speed = get(kwargs, :forward_speed, prob.forward_speed)
+    radiating_dof = get(kwargs, :radiating_dof, prob.radiating_dof)
+    influenced_dofs = collect(Symbol, get(kwargs, :influenced_dofs, prob.influenced_dofs))
+    wavenumber = haskey(kwargs, :wavenumber) ? kwargs[:wavenumber] :
+        (haskey(kwargs, :omega) ? compute_wavenumber(omega) : prob.wavenumber)
+    beta = if haskey(kwargs, :beta)
+        kwargs[:beta]
+    elseif forward_speed == 0
+        nothing
+    else
+        prob.beta
+    end
+    return RadiationProblem(floatingbody, omega, beta, wavenumber, forward_speed,
+        radiating_dof, influenced_dofs)
+end
+
+function remake(prob::DiffractionProblem; kwargs...)
+    floatingbody = get(kwargs, :floatingbody, prob.floatingbody)
+    omega = get(kwargs, :omega, prob.omega)
+    forward_speed = get(kwargs, :forward_speed, prob.forward_speed)
+    influenced_dofs = collect(Symbol, get(kwargs, :influenced_dofs, prob.influenced_dofs))
+    wavenumber = haskey(kwargs, :wavenumber) ? kwargs[:wavenumber] :
+        (haskey(kwargs, :omega) ? compute_wavenumber(omega) : prob.wavenumber)
+    beta = get(kwargs, :beta, prob.beta)
+    return DiffractionProblem(floatingbody, omega, beta, wavenumber, forward_speed, influenced_dofs)
+end
+
 ########################## Results #########################################
 
 abstract type LinearPotentialFlowResult end
@@ -108,15 +138,18 @@ struct RadiationResult{P<:RadiationProblem} <: LinearPotentialFlowResult
     forces::NamedTuple
 end
 
-# Added mass and damping from a radiation solve (`A = Re(F)/ω²`, `B = Im(F)/ω`).
-# Keys match `res.forces` (dof symbols). Use the encountered frequency when `U ≠ 0`.
-function radiation_coefficients(res::RadiationResult)
-    ω = res.problem.forward_speed == 0 ? res.problem.omega : res.problem.encountered_omega
-    return (
-        added_mass = map(F -> real(F) / ω^2, res.forces),
-        radiation_damping = map(F -> imag(F) / ω, res.forces),
-    )
-end
+# Added mass and damping (`A = Re(F)/ω²`, `B = Im(F)/ω`). Dual `ω` / Dual forces
+# stay Dual. Reverse-mode engines need a real scalar: `added_mass(sol).Heave`.
+_result_omega(res::RadiationResult) =
+    res.problem.forward_speed == 0 ? res.problem.omega : res.problem.encountered_omega
+
+added_mass(res::RadiationResult) = map(F -> real(F) / _result_omega(res)^2, res.forces)
+radiation_damping(res::RadiationResult) = map(F -> imag(F) / _result_omega(res), res.forces)
+
+radiation_coefficients(res::RadiationResult) = (
+    added_mass = added_mass(res),
+    radiation_damping = radiation_damping(res),
+)
 
 # Convert problem and forces for that problem into a results struct
 function make_result(problem::RadiationProblem, forces::NamedTuple)
@@ -241,8 +274,7 @@ function assemble_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody
             rad_lookup = Dict(
                 (radiating_dof = r.problem.radiating_dof,
                 omega = r.problem.omega,
-                forward_speed = r.problem.forward_speed) => (map(f -> real(f)/r.problem.omega^2, r.forces), # added mass
-                                                            map(f -> imag(f)/r.problem.omega, r.forces)) # radiation damping
+                forward_speed = r.problem.forward_speed) => (added_mass(r), radiation_damping(r))
                 for r in results if r isa RadiationResult
             )
             added_mass_data = [
@@ -262,8 +294,7 @@ function assemble_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody
                 (radiating_dof = r.problem.radiating_dof,
                 omega = r.problem.omega,
                 forward_speed = r.problem.forward_speed,
-                beta = r.problem.beta) => (map(f -> real(f)/r.problem.encountered_omega^2, r.forces), # added mass
-                                            map(f -> imag(f)/r.problem.encountered_omega, r.forces)) # radiation damping
+                beta = r.problem.beta) => (added_mass(r), radiation_damping(r))
                 for r in results if r isa RadiationResult
             )
             added_mass_data = [
@@ -356,28 +387,29 @@ function create_DimStack(data::NamedTuple, parameters::NamedTuple, floatingbody:
 end
 
 # Same as `create_DimStack`: attach DimensionalData labels after AD.
-# Reverse-mode engines should differentiate `compute_hydrodynamic_coefficients`
+# Reverse-mode engines should differentiate `hydrodynamic_coefficients`
 # (NamedTuple of arrays), then label both the primal and the ∂ arrays here.
 const label_hydrodynamic_coefficients = create_DimStack
 
 
 
-# Compute NamedTuple of results (keys added_mass, radiation_damping, …).
-# Differentiable for ForwardDiff (ω, Dual geometry) and for Enzyme reverse
-# on a StaticArraysMesh FloatingBody if the loss is a scalar from these arrays.
-# Do not differentiate `compute_and_label_hydrodynamic_coefficients`: wrap
-# these arrays with `create_DimStack` / `label_hydrodynamic_coefficients` after AD.
-function compute_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody; direct::Bool=true, gf::String="Wu", greens_functions=nothing)
+# NamedTuple of real arrays (keys added_mass, radiation_damping, …). This is the
+# differentiable payload. Label with `create_DimStack` after AD, not through it.
+function hydrodynamic_coefficients(floatingbody::FloatingBody, parameters::NamedTuple,
+        alg::BEMAlgorithm = DirectBEM())
     problems = problems_from_data(parameters, floatingbody)
-    results = solve_all_problems(problems; direct=direct, gf=gf, greens_functions=greens_functions)
-    data = assemble_hydrodynamic_coefficients(parameters, floatingbody, results)
-    return data
+    results = solve(problems, alg)
+    return assemble_hydrodynamic_coefficients(parameters, floatingbody, results)
 end
 
-# Labels coefficient arrays. Reverse-mode AD should run on
-# `compute_hydrodynamic_coefficients` and then call this on the primal and on ∂data.
-function compute_and_label_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody; direct::Bool=true, gf::String="Wu", greens_functions=nothing)
-    data = compute_hydrodynamic_coefficients(parameters, floatingbody; direct=direct, gf=gf, greens_functions=greens_functions)
-    DimStack_of_data = create_DimStack(data, parameters, floatingbody)
-    return DimStack_of_data
+function compute_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody;
+        alg=nothing, direct::Bool=true, gf::String="Wu", greens_functions=nothing)
+    return hydrodynamic_coefficients(floatingbody, parameters,
+        bem_algorithm(; alg, direct, gf, greens_functions))
+end
+
+function compute_and_label_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody;
+        alg=nothing, direct::Bool=true, gf::String="Wu", greens_functions=nothing)
+    data = compute_hydrodynamic_coefficients(parameters, floatingbody; alg, direct, gf, greens_functions)
+    return create_DimStack(data, parameters, floatingbody)
 end

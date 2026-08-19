@@ -32,13 +32,13 @@ end
 fd_mesh_rules!(cylinder_smesh)
 
 const ω = 1.2
-added_mass(p) = radiation_coefficients(
-    solve_problem(RadiationProblem(FloatingBody(cylinder_smesh(p), [:Heave], "cyl"), ω))
-).added_mass.Heave
+A33(p) = added_mass(
+    solve(RadiationProblem(FloatingBody(cylinder_smesh(p), [:Heave], "cyl"), ω), DirectBEM())
+).Heave
 
 p = [1.0, 2.0]
-gradient(added_mass, AutoForwardDiff(), p)
-gradient(added_mass, AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse)), p)
+gradient(A33, AutoForwardDiff(), p)
+gradient(A33, AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse)), p)
 ```
 """
 module GeometryAD

@@ -72,13 +72,10 @@ end
         @test ez_A ≈ zy_A rtol=1e-5 atol=1e-6
     end
 
-    # smesh + solve_problem: Dual / Enzyme through Capytaine mesher.
+    # smesh + solve: Dual / Enzyme through Capytaine mesher.
     function added_mass_smesh(r, omega, mesher)
         body = FloatingBody(StaticArraysMesh(mesher(r)), [:Heave], "s")
-        k = compute_wavenumber(omega)
-        F = solve_problem(RadiationProblem(body, omega, nothing, k, 0.0, :Heave, [:Heave]);
-            direct=true, gf="Wu").forces[:Heave]
-        return real(F) / omega^2
+        return added_mass(solve(RadiationProblem(body, omega), DirectBEM())).Heave
     end
     fwd_s = ForwardDiff.derivative(r -> added_mass_smesh(r, ω, hull), r0)
     fd_s = (added_mass_smesh(r0 + h, ω, hull) - added_mass_smesh(r0 - h, ω, hull)) / (2h)

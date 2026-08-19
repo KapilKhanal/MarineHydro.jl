@@ -242,8 +242,8 @@ end
 function _compare_rankine_coefficients(floatingbody, parameters; rtol=1e-2, atol=1e-2)
     delhommeau_gfs = (DelhommeauRankine(), DelhommeauRankineReflected(), GFWu())
     rankine_gfs = (Rankine(), RankineReflected(), GFWu())
-    data_d = compute_hydrodynamic_coefficients(parameters, floatingbody; greens_functions=delhommeau_gfs)
-    data_r = compute_hydrodynamic_coefficients(parameters, floatingbody; greens_functions=rankine_gfs)
+    data_d = hydrodynamic_coefficients(floatingbody, parameters, DirectBEM(delhommeau_gfs))
+    data_r = hydrodynamic_coefficients(floatingbody, parameters, DirectBEM(rankine_gfs))
     @test data_r.added_mass ≈ data_d.added_mass rtol=rtol atol=atol
     @test data_r.radiation_damping ≈ data_d.radiation_damping rtol=rtol atol=atol
     @test data_r.diffraction_force ≈ data_d.diffraction_force rtol=rtol atol=atol
