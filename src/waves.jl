@@ -243,9 +243,36 @@ end
 
 #boundary conditions from airy wave for solving diffraction problem
 function AiryBC(problem::DiffractionProblem)
-    """Boundary condition for diffraction problem : the velocity on the floating body is the velocity of Airy wave field."""
-    bcs = -sum(airy_waves_velocity(problem.floatingbody.mesh.centers, problem) .* problem.floatingbody.mesh.normals, dims = 2)
-    return bcs
+    return _airy_bc(problem.floatingbody.mesh, problem)
+end
+
+function _airy_bc(mesh::Mesh, problem::DiffractionProblem)
+    return -sum(airy_waves_velocity(mesh.centers, problem) .* mesh.normals, dims=2)
+end
+
+function _airy_phi(p::SVector{3}, problem::DiffractionProblem)
+    k = problem.wavenumber
+    enc_beta = problem.encountered_beta
+    wbar = p[1] * cos(enc_beta) + p[2] * sin(enc_beta)
+    return -1im * SETTINGS.g / problem.omega * exp(k * p[3]) * exp(1im * k * wbar)
+end
+
+function _airy_vel(p::SVector{3}, problem::DiffractionProblem)
+    k = problem.wavenumber
+    enc_beta = problem.encountered_beta
+    wbar = p[1] * cos(enc_beta) + p[2] * sin(enc_beta)
+    cih = exp(k * p[3])
+    amp = SETTINGS.g * k / problem.omega * exp(1im * k * wbar)
+    return SVector(amp * cos(problem.beta) * cih, amp * sin(problem.beta) * cih, -1im * amp * cih)
+end
+
+function _airy_bc(mesh::StaticArraysMesh, problem::DiffractionProblem)
+    # Do not use `dot` — it conjugates Complex velocities and flips the force.
+    return [begin
+        v = _airy_vel(mesh.centers[i], problem)
+        n = mesh.normals[i]
+        -(v[1] * n[1] + v[2] * n[2] + v[3] * n[3])
+    end for i in eachindex(mesh.centers)]
 end
 
 function compute_bc(problem::DiffractionProblem)
@@ -260,10 +287,12 @@ function airy_waves_pressure(points, problem::DiffractionProblem)
 end
 
 function FroudeKrylovForce(problem::DiffractionProblem, influenced_dofs::Vector{Symbol})
-    """Compute the Froude-Krylov force."""
-
     mesh = problem.floatingbody.mesh
-    pressure =  airy_waves_pressure(mesh.centers,  problem)
-    forces = integrate_pressure(problem.floatingbody, influenced_dofs, pressure) 
-    return forces 
+    pressure = _airy_pressure(mesh, problem)
+    return integrate_pressure(problem.floatingbody, influenced_dofs, pressure)
+end
+
+_airy_pressure(mesh::Mesh, problem::DiffractionProblem) = airy_waves_pressure(mesh.centers, problem)
+function _airy_pressure(mesh::StaticArraysMesh, problem::DiffractionProblem)
+    return [1im * problem.omega * SETTINGS.rho * _airy_phi(p, problem) for p in mesh.centers]
 end

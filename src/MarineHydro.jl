@@ -38,13 +38,14 @@ export Mesh, StaticArraysMesh, smesh, element, combine_meshes, +, wavebot_mesh
 include("bodies.jl")
 export FloatingBody, combine_floatingbodies, +
 
-include("algorithms.jl")
-export BEMAlgorithm, DirectBEM, IndirectBEM
+include("formulations.jl")
+export BEMFormulation, DirectBEM, IndirectBEM
 
 include("problems_and_results.jl")
 export LinearPotentialFlowProblem, DiffractionProblem, RadiationProblem, remake
 export LinearPotentialFlowResult, DiffractionResult, RadiationResult
 export added_mass, radiation_damping, radiation_coefficients
+export diffraction_force, froude_krylov_force, excitation_force
 export make_result, problems_from_data, assemble_hydrodynamic_coefficients
 export create_DimStack, label_hydrodynamic_coefficients, hydrodynamic_coefficients
 export compute_hydrodynamic_coefficients, compute_and_label_hydrodynamic_coefficients

@@ -27,10 +27,10 @@ body_lid = FloatingBody(hull, lid, [:Heave], "withlid")
 smesh = StaticArraysMesh(cpt_mesh)
 body_smesh = FloatingBody(smesh, [:Heave], "smesh")
 const ω = 1.2
-const alg = DirectBEM()
+const formulation = DirectBEM()
 
-heave_force(body, w) = real(solve(RadiationProblem(body, w), alg).forces[:Heave])
-heave_A(body, w) = added_mass(solve(RadiationProblem(body, w), alg)).Heave
+heave_force(body, w) = real(solve(RadiationProblem(body, w), formulation).forces[:Heave])
+heave_A(body, w) = added_mass(solve(RadiationProblem(body, w), formulation)).Heave
 
 function smesh_from_radius(r, smesh0)
     s = r
@@ -73,7 +73,7 @@ end
     F1 = heave_force(body_lid, ω)
     @test isfinite(F0)
     @test isfinite(F1)
-    res = solve(RadiationProblem(body_smesh, ω), alg)
+    res = solve(RadiationProblem(body_smesh, ω), formulation)
     @test added_mass(res).Heave ≈ real(res.forces[:Heave]) / ω^2
     @test radiation_damping(res).Heave ≈ imag(res.forces[:Heave]) / ω
 end
@@ -81,7 +81,7 @@ end
 @testset "remake omega then solve" begin
     prob0 = RadiationProblem(body_smesh, ω)
     dω = ForwardDiff.Dual(ω, 1.0)
-    res = solve(remake(prob0; omega=dω), alg)
+    res = solve(remake(prob0; omega=dω), formulation)
     @test res isa RadiationResult
     @test added_mass(res).Heave isa ForwardDiff.Dual
 end
@@ -101,7 +101,7 @@ end
 @testset "hydrodynamic_coefficients Rankine reuse is differentiable in ω" begin
     function A_two_freq(w)
         parameters = (wave_frequencies=[w, w + 0.25], radiating_dofs=[:Heave], influenced_dofs=[:Heave])
-        data = hydrodynamic_coefficients(body_nolid, parameters, alg)
+        data = hydrodynamic_coefficients(body_nolid, parameters, formulation)
         return sum(data.added_mass)
     end
     fd = ForwardDiff.derivative(A_two_freq, ω)
@@ -109,7 +109,7 @@ end
     @test fd ≈ cfd rtol=1e-4 atol=1e-4
 end
 
-@testset "smesh FloatingBody through solve(prob, alg)" begin
+@testset "smesh FloatingBody through solve(prob, formulation)" begin
     @test body_smesh isa FloatingBody{<:StaticArraysMesh}
     @test body_nolid isa FloatingBody{<:Mesh}
     F_dense = heave_force(body_nolid, ω)
@@ -126,7 +126,7 @@ end
 
     function A_two_freq_smesh(w)
         parameters = (wave_frequencies=[w, w + 0.25], radiating_dofs=[:Heave], influenced_dofs=[:Heave])
-        data = hydrodynamic_coefficients(body_smesh, parameters, alg)
+        data = hydrodynamic_coefficients(body_smesh, parameters, formulation)
         return sum(data.added_mass)
     end
     fd_all = ForwardDiff.derivative(A_two_freq_smesh, ω)
@@ -147,5 +147,33 @@ end
         @test ez_r ≈ fd_r rtol=1e-5 atol=1e-6
     else
         @test_skip "Enzyme not installed"
+    end
+end
+
+@testset "hydrodynamic_coefficients Enzyme reverse vs ForwardDiff" begin
+    if !HAS_ENZYME
+        @test_skip "Enzyme not installed"
+    else
+        fwd = AutoForwardDiff()
+        rev = AutoEnzyme(; mode=Enzyme.set_runtime_activity(Enzyme.Reverse))
+
+        function A_two_freq_smesh(w)
+            parameters = (wave_frequencies=[w, w + 0.25], radiating_dofs=[:Heave], influenced_dofs=[:Heave])
+            data = hydrodynamic_coefficients(body_smesh, parameters, formulation)
+            return sum(data.added_mass)
+        end
+        dA_fwd = DI.derivative(A_two_freq_smesh, fwd, ω)
+        dA_rev = DI.derivative(A_two_freq_smesh, rev, ω)
+        @test dA_rev ≈ dA_fwd rtol=1e-5 atol=1e-6
+
+        function Fex_two_freq(w)
+            parameters = (wave_frequencies=[w, w + 0.25], radiating_dofs=[:Heave],
+                wave_directions=[0.0], influenced_dofs=[:Heave])
+            data = hydrodynamic_coefficients(body_smesh, parameters, formulation)
+            return sum(real, data.excitation_force)
+        end
+        dF_fwd = DI.derivative(Fex_two_freq, fwd, ω)
+        dF_rev = DI.derivative(Fex_two_freq, rev, ω)
+        @test dF_rev ≈ dF_fwd rtol=1e-5 atol=1e-6
     end
 end

@@ -39,6 +39,26 @@ function DiffractionProblem(floatingbody::FloatingBody,
     end
 end
 
+function DiffractionProblem(floatingbody::FloatingBody, omega, beta;
+        influenced_dofs::Union{AbstractVector,Nothing}=nothing,
+        forward_speed=0,
+        wavenumber=nothing)
+    inf = isnothing(influenced_dofs) ?
+        collect(Symbol, keys(floatingbody.dofs)) :
+        collect(Symbol, influenced_dofs)
+    k = isnothing(wavenumber) ? compute_wavenumber(omega) : wavenumber
+    return DiffractionProblem(floatingbody, omega, beta, k, forward_speed, inf)
+end
+
+function DiffractionProblem(floatingbody::FloatingBody, omega;
+        beta=0.0,
+        influenced_dofs::Union{AbstractVector,Nothing}=nothing,
+        forward_speed=0,
+        wavenumber=nothing)
+    return DiffractionProblem(floatingbody, omega, beta;
+        influenced_dofs, forward_speed, wavenumber)
+end
+
 
 # `B` is the concrete `FloatingBody{...}` type. Enzyme reverse through an
 # abstract `floatingbody::FloatingBody` field (and `Union{T,Nothing}` betas)
@@ -151,6 +171,12 @@ radiation_coefficients(res::RadiationResult) = (
     radiation_damping = radiation_damping(res),
 )
 
+diffraction_force(res::DiffractionResult) = res.forces
+froude_krylov_force(res::DiffractionResult) =
+    FroudeKrylovForce(res.problem, res.problem.influenced_dofs)
+excitation_force(res::DiffractionResult) =
+    map(+, diffraction_force(res), froude_krylov_force(res))
+
 # Convert problem and forces for that problem into a results struct
 function make_result(problem::RadiationProblem, forces::NamedTuple)
     return RadiationResult(problem,forces)
@@ -160,169 +186,123 @@ function make_result(problem::DiffractionProblem, forces::NamedTuple)
 end
 
 
-# Convert parameters and problem into a Vector of problems
+# NamedTuple keys are part of the type. `Val{(:foo in K)}()` picks a method at
+# compile time so Enzyme never sees the other branch (no Union, no `nothing`).
+_inf_dofs(p::NamedTuple{K}, body) where K = _inf_dofs(Val{(:influenced_dofs in K)}(), p, body)
+_inf_dofs(::Val{true}, p, body) = collect(Symbol, p.influenced_dofs)
+_inf_dofs(::Val{false}, p, body) = collect(Symbol, keys(body.dofs))
+
+_speeds(p::NamedTuple{K}, ωs) where K = _speeds(Val{(:forward_speeds in K)}(), p, ωs)
+_speeds(::Val{true}, p, ωs) = p.forward_speeds
+_speeds(::Val{false}, p, ωs) = [zero(eltype(ωs))]
+
+_empty_problems(::Type{P}, ::Type{T}, body) where {P,T} = P{T, typeof(body)}[]
+
 function problems_from_data(parameters::NamedTuple, floatingbody::FloatingBody)
-
-    # if influenced_dofs not specified, assume all floatingbody dofs are influenced
-    if :influenced_dofs in keys(parameters)
-        inf_dofs = parameters.influenced_dofs
-    else
-        inf_dofs = collect(keys(floatingbody.dofs))
-    end
-
-    # Forward speed corrections
-    if :forward_speeds in keys(parameters)
-        forward_speeds = parameters.forward_speeds
-    else
-        forward_speeds = [0] # assume zero forward speed in not specified
-    end
-
-    # There is at least one diffraction problem to solve
-    if :wave_directions in keys(parameters)
-        diffraction_problems = vec([DiffractionProblem(floatingbody, omega, beta, compute_wavenumber(omega), forward_speed, inf_dofs) 
-            for beta in parameters[:wave_directions], 
-                omega in parameters[:wave_frequencies],
-                forward_speed in forward_speeds])
-    else
-        diffraction_problems = DiffractionProblem[]
-    end
-
-    # There is at least one radiation problem to solve
-    if :radiating_dofs in keys(parameters)
-
-        if forward_speeds==[0]
-            beta=nothing # wave direction does not matter for radiation problems with zero forward speed
-            radiation_problems = vec([RadiationProblem(floatingbody, omega, beta, compute_wavenumber(omega), forward_speed, rad_dof, inf_dofs)  
-            for rad_dof in parameters[:radiating_dofs], 
-                omega in parameters[:wave_frequencies],
-                forward_speed in forward_speeds])
-        else
-            radiation_problems = vec([RadiationProblem(floatingbody, omega, beta, compute_wavenumber(omega), forward_speed, rad_dof, inf_dofs)  
-            for beta in parameters[:wave_directions], # also loop through wave directions
-                rad_dof in parameters[:radiating_dofs], 
-                omega in parameters[:wave_frequencies],
-                forward_speed in forward_speeds])
-        end  
-        
-        
-    else
-        radiation_problems = RadiationProblem[]
-    end
-
-    isempty(diffraction_problems) && return radiation_problems
-    isempty(radiation_problems) && return diffraction_problems
-    return vcat(diffraction_problems, radiation_problems)
+    ωs = parameters.wave_frequencies
+    inf = _inf_dofs(parameters, floatingbody)
+    Us = _speeds(parameters, ωs)
+    return (
+        radiation = _make_radiation(parameters, floatingbody, ωs, Us, inf),
+        diffraction = _make_diffraction(parameters, floatingbody, ωs, Us, inf),
+    )
 end
 
+_make_radiation(p::NamedTuple{K}, body, ωs, Us, inf) where K =
+    _make_radiation(Val{(:radiating_dofs in K)}(), p, body, ωs, Us, inf)
 
-# Convert Vector of results into NameTuple of hydrodynamic coefficients
-# assemble_hydrodynamic_coefficients automatically determines what outputs to compute based on what parameters are specified. 
-function assemble_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody, results::Vector{<:LinearPotentialFlowResult})
+function _make_radiation(::Val{false}, p, body, ωs, Us, inf)
+    return _empty_problems(RadiationProblem, promote_type(eltype(ωs), eltype(Us)), body)
+end
 
-    omegas = parameters.wave_frequencies
+_make_radiation(::Val{true}, p::NamedTuple{K}, body, ωs, Us, inf) where K =
+    _make_radiation_grid(Val{(:forward_speeds in K)}(), p, body, ωs, Us, inf)
 
+function _make_radiation_grid(::Val{false}, p, body, ωs, Us, inf)
+    β = zero(promote_type(eltype(ωs), eltype(Us)))
+    return vec([RadiationProblem(body, ω, β, compute_wavenumber(ω), U, dof, inf)
+        for dof in p.radiating_dofs, ω in ωs, U in Us])
+end
 
-    # Forward speed corrections
-    if :forward_speeds in keys(parameters)
-        forward_speeds = parameters.forward_speeds
-    else
-        forward_speeds = [0] # assume zero forward speed in not specified
-    end
+function _make_radiation_grid(::Val{true}, p, body, ωs, Us, inf)
+    return vec([RadiationProblem(body, ω, β, compute_wavenumber(ω), U, dof, inf)
+        for β in p.wave_directions, dof in p.radiating_dofs, ω in ωs, U in Us])
+end
 
-    if :influenced_dofs in keys(parameters)
-        inf_dofs = parameters.influenced_dofs
-    else
-        inf_dofs = collect(keys(floatingbody.dofs))
-    end
+_make_diffraction(p::NamedTuple{K}, body, ωs, Us, inf) where K =
+    _make_diffraction(Val{(:wave_directions in K)}(), p, body, ωs, Us, inf)
 
-    # At least one diffraction result 
-    if any(r -> r isa DiffractionResult, results)
-        betas = parameters.wave_directions
-        dif_lookup = Dict(
-            (omega = r.problem.omega,
-            beta = r.problem.beta,
-            forward_speed = r.problem.forward_speed) => r.forces 
-            for r in results if r isa DiffractionResult
-        )
-        inc_lookup = Dict(
-            (omega = r.problem.omega,
-            beta = r.problem.beta,
-            forward_speed = r.problem.forward_speed) => FroudeKrylovForce(r.problem,inf_dofs)
-            for r in results if r isa DiffractionResult
-        )
-        diffraction_force_data = [
-        dif_lookup[(omega=omega,beta=beta,forward_speed=forward_speed)][i] 
-        for i in 1:length(inf_dofs), omega in omegas, beta in betas, forward_speed in forward_speeds
-        ]
-        Froude_Krylov_force_data = [
-            inc_lookup[(omega=omega,beta=beta,forward_speed=forward_speed)][i] 
-            for i in 1:length(inf_dofs), omega in omegas, beta in betas, forward_speed in forward_speeds
-        ]
-        excitation_force_data = diffraction_force_data .+ Froude_Krylov_force_data
-    else
-        diffraction_force_data = []
-        Froude_Krylov_force_data = []
-        excitation_force_data = []
-    end
+function _make_diffraction(::Val{false}, p, body, ωs, Us, inf)
+    return _empty_problems(DiffractionProblem, promote_type(eltype(ωs), eltype(Us)), body)
+end
 
+function _make_diffraction(::Val{true}, p, body, ωs, Us, inf)
+    return vec([DiffractionProblem(body, ω, β, compute_wavenumber(ω), U, inf)
+        for β in p.wave_directions, ω in ωs, U in Us])
+end
 
-    # At least one radiation result
-    if any(r -> r isa RadiationResult, results)
-        rad_dofs = parameters.radiating_dofs
+# Column-major index of `vec(A)` when A has size (n1, n2, n3) or (n1, n2, n3, n4).
+_lin(i1, i2, i3, n1, n2) = i1 + n1 * ((i2 - 1) + n2 * (i3 - 1))
+_lin(i1, i2, i3, i4, n1, n2, n3) = i1 + n1 * ((i2 - 1) + n2 * ((i3 - 1) + n3 * (i4 - 1)))
 
-        if forward_speeds == [0] # No forward speed, so do not need beta dimension
-            rad_lookup = Dict(
-                (radiating_dof = r.problem.radiating_dof,
-                omega = r.problem.omega,
-                forward_speed = r.problem.forward_speed) => (added_mass(r), radiation_damping(r))
-                for r in results if r isa RadiationResult
-            )
-            added_mass_data = [
-                rad_lookup[(radiating_dof=radiating_dof,
-                omega=omega,
-                forward_speed=forward_speed)][1][i]
-                for i in 1:length(inf_dofs), radiating_dof in rad_dofs, omega in omegas, forward_speed in forward_speeds
-            ]
-            radiation_damping_data = [
-                rad_lookup[(radiating_dof=radiating_dof,
-                omega=omega,
-                forward_speed=forward_speed)][2][i]
-                for i in 1:length(inf_dofs), radiating_dof in rad_dofs, omega in omegas, forward_speed in forward_speeds
-            ]
-        else # Non-zero forward speed, so need beta dimension
-            rad_lookup = Dict(
-                (radiating_dof = r.problem.radiating_dof,
-                omega = r.problem.omega,
-                forward_speed = r.problem.forward_speed,
-                beta = r.problem.beta) => (added_mass(r), radiation_damping(r))
-                for r in results if r isa RadiationResult
-            )
-            added_mass_data = [
-                rad_lookup[(radiating_dof=radiating_dof,
-                omega=omega,
-                forward_speed=forward_speed,
-                beta=beta)][1][i]
-                for i in 1:length(inf_dofs), radiating_dof in rad_dofs, omega in omegas, forward_speed in forward_speeds, beta in betas
-            ]
-            radiation_damping_data = [
-                rad_lookup[(radiating_dof=radiating_dof,
-                omega=omega,
-                forward_speed=forward_speed,
-                beta=beta)][2][i]
-                for i in 1:length(inf_dofs), radiating_dof in rad_dofs, omega in omegas, forward_speed in forward_speeds, beta in betas
-            ]
-        end
-    else
-        added_mass_data = []
-        radiation_damping_data = []
-    end    
-    data = (added_mass=added_mass_data,
-    radiation_damping=radiation_damping_data,
-    diffraction_force=diffraction_force_data,
-    Froude_Krylov_force=Froude_Krylov_force_data,
-    excitation_force=excitation_force_data)
-    
-    return data 
+_empty_coeff(ωs) = zeros(eltype(ωs), 0)
+
+function assemble_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody,
+        radiation::AbstractVector, diffraction::AbstractVector)
+    ωs = parameters.wave_frequencies
+    inf = _inf_dofs(parameters, floatingbody)
+    Us = _speeds(parameters, ωs)
+    A, B = _pack_radiation(parameters, radiation, inf, ωs, Us)
+    Fd, Fk, Fe = _pack_diffraction(parameters, diffraction, inf, ωs, Us)
+    return (added_mass=A, radiation_damping=B,
+        diffraction_force=Fd, Froude_Krylov_force=Fk, excitation_force=Fe)
+end
+
+_pack_radiation(p::NamedTuple{K}, results, inf, ωs, Us) where K =
+    _pack_radiation(Val{(:radiating_dofs in K)}(), p, results, inf, ωs, Us)
+
+function _pack_radiation(::Val{false}, p, results, inf, ωs, Us)
+    z = _empty_coeff(ωs)
+    return z, z
+end
+
+_pack_radiation(::Val{true}, p::NamedTuple{K}, results, inf, ωs, Us) where K =
+    _pack_radiation_grid(Val{(:forward_speeds in K)}(), p, results, inf, ωs, Us)
+
+function _pack_radiation_grid(::Val{false}, p, results, inf, ωs, Us)
+    n_inf, n_rad, n_ω, n_U = length(inf), length(p.radiating_dofs), length(ωs), length(Us)
+    A = [values(added_mass(results[_lin(ir, iω, iU, n_rad, n_ω)]))[i]
+        for i in 1:n_inf, ir in 1:n_rad, iω in 1:n_ω, iU in 1:n_U]
+    B = [values(radiation_damping(results[_lin(ir, iω, iU, n_rad, n_ω)]))[i]
+        for i in 1:n_inf, ir in 1:n_rad, iω in 1:n_ω, iU in 1:n_U]
+    return A, B
+end
+
+function _pack_radiation_grid(::Val{true}, p, results, inf, ωs, Us)
+    n_inf = length(inf)
+    n_β, n_rad, n_ω, n_U = length(p.wave_directions), length(p.radiating_dofs), length(ωs), length(Us)
+    A = [values(added_mass(results[_lin(iβ, ir, iω, iU, n_β, n_rad, n_ω)]))[i]
+        for i in 1:n_inf, ir in 1:n_rad, iω in 1:n_ω, iU in 1:n_U, iβ in 1:n_β]
+    B = [values(radiation_damping(results[_lin(iβ, ir, iω, iU, n_β, n_rad, n_ω)]))[i]
+        for i in 1:n_inf, ir in 1:n_rad, iω in 1:n_ω, iU in 1:n_U, iβ in 1:n_β]
+    return A, B
+end
+
+_pack_diffraction(p::NamedTuple{K}, results, inf, ωs, Us) where K =
+    _pack_diffraction(Val{(:wave_directions in K)}(), p, results, inf, ωs, Us)
+
+function _pack_diffraction(::Val{false}, p, results, inf, ωs, Us)
+    z = _empty_coeff(ωs)
+    return z, z, z
+end
+
+function _pack_diffraction(::Val{true}, p, results, inf, ωs, Us)
+    n_inf, n_β, n_ω, n_U = length(inf), length(p.wave_directions), length(ωs), length(Us)
+    Fd = [values(diffraction_force(results[_lin(iβ, iω, iU, n_β, n_ω)]))[i]
+        for i in 1:n_inf, iω in 1:n_ω, iβ in 1:n_β, iU in 1:n_U]
+    Fk = [values(froude_krylov_force(results[_lin(iβ, iω, iU, n_β, n_ω)]))[i]
+        for i in 1:n_inf, iω in 1:n_ω, iβ in 1:n_β, iU in 1:n_U]
+    return Fd, Fk, Fd .+ Fk
 end
 
 
@@ -395,21 +375,52 @@ const label_hydrodynamic_coefficients = create_DimStack
 
 # NamedTuple of real arrays (keys added_mass, radiation_damping, …). This is the
 # differentiable payload. Label with `create_DimStack` after AD, not through it.
+# Map over frequencies: Enzyme reverse of a Vector of problems only adjoints ω₁.
+# `wave_frequencies` may be a scalar (`ForwardDiff.derivative` / FD on one ω).
+_freq_vec(ωs::AbstractArray) = ωs
+_freq_vec(ωs) = [ωs]
+
 function hydrodynamic_coefficients(floatingbody::FloatingBody, parameters::NamedTuple,
-        alg::BEMAlgorithm = DirectBEM())
-    problems = problems_from_data(parameters, floatingbody)
-    results = solve(problems, alg)
-    return assemble_hydrodynamic_coefficients(parameters, floatingbody, results)
+        formulation::BEMFormulation = DirectBEM())
+    chunks = map(_freq_vec(parameters.wave_frequencies)) do ω
+        _hydro_one_frequency(floatingbody, parameters, ω, formulation)
+    end
+    return _stack_frequency_chunks(chunks)
+end
+
+function _hydro_one_frequency(floatingbody, parameters, ω, formulation)
+    params1 = merge(parameters, (wave_frequencies = [ω],))
+    problems = problems_from_data(params1, floatingbody)
+    radiation = solve(problems.radiation, formulation)
+    diffraction = solve(problems.diffraction, formulation)
+    return assemble_hydrodynamic_coefficients(params1, floatingbody, radiation, diffraction)
+end
+
+function _stack_or_empty(xs, dim)
+    x1 = xs[1]
+    ndims(x1) <= 1 && isempty(x1) && return x1
+    length(xs) == 1 && return x1
+    return cat(xs...; dims=dim)
+end
+
+function _stack_frequency_chunks(chunks::AbstractVector)
+    return (
+        added_mass = _stack_or_empty(map(c -> c.added_mass, chunks), 3),
+        radiation_damping = _stack_or_empty(map(c -> c.radiation_damping, chunks), 3),
+        diffraction_force = _stack_or_empty(map(c -> c.diffraction_force, chunks), 2),
+        Froude_Krylov_force = _stack_or_empty(map(c -> c.Froude_Krylov_force, chunks), 2),
+        excitation_force = _stack_or_empty(map(c -> c.excitation_force, chunks), 2),
+    )
 end
 
 function compute_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody;
-        alg=nothing, direct::Bool=true, gf::String="Wu", greens_functions=nothing)
+        formulation=nothing, direct::Bool=true, gf::String="Wu", greens_functions=nothing)
     return hydrodynamic_coefficients(floatingbody, parameters,
-        bem_algorithm(; alg, direct, gf, greens_functions))
+        bem_formulation(; formulation, direct, gf, greens_functions))
 end
 
 function compute_and_label_hydrodynamic_coefficients(parameters::NamedTuple, floatingbody::FloatingBody;
-        alg=nothing, direct::Bool=true, gf::String="Wu", greens_functions=nothing)
-    data = compute_hydrodynamic_coefficients(parameters, floatingbody; alg, direct, gf, greens_functions)
+        formulation=nothing, direct::Bool=true, gf::String="Wu", greens_functions=nothing)
+    data = compute_hydrodynamic_coefficients(parameters, floatingbody; formulation, direct, gf, greens_functions)
     return create_DimStack(data, parameters, floatingbody)
 end

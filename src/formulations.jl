@@ -1,15 +1,16 @@
-# Method choices live on the algorithm, not on kwargs / strings.
-# `solve(prob, DirectBEM())` is the SciML `solve(prob, Tsit5())` pattern.
+# Direct vs indirect and the Green functions live on the formulation, not kwargs.
+# `solve(prob, DirectBEM())` has the same shape as SciML `solve(prob, Tsit5())`,
+# but the second argument is a BEM formulation, not a time-stepping algorithm.
 
-abstract type BEMAlgorithm end
+abstract type BEMFormulation end
 
-struct DirectBEM{G} <: BEMAlgorithm
+struct DirectBEM{G} <: BEMFormulation
     greens::G
 end
 DirectBEM() = DirectBEM((Rankine(), RankineReflected(), GFWu()))
 DirectBEM(gf::AbstractString) = DirectBEM(default_greens_functions(String(gf)))
 
-struct IndirectBEM{G} <: BEMAlgorithm
+struct IndirectBEM{G} <: BEMFormulation
     greens::G
 end
 IndirectBEM() = IndirectBEM((Rankine(), RankineReflected(), GFWu()))
@@ -29,8 +30,8 @@ function default_greens_functions(gf::String)
     return (Rankine(), RankineReflected(), wave_gf)
 end
 
-function bem_algorithm(; alg=nothing, direct::Bool=true, gf::String="Wu", greens_functions=nothing)
-    alg !== nothing && return alg
+function bem_formulation(; formulation=nothing, direct::Bool=true, gf::String="Wu", greens_functions=nothing)
+    formulation !== nothing && return formulation
     gfs = greens_functions === nothing ? default_greens_functions(gf) : greens_functions
     return direct ? DirectBEM(gfs) : IndirectBEM(gfs)
 end

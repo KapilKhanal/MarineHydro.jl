@@ -31,8 +31,8 @@ smesh = MH.StaticArraysMesh(vertices, faces, centers, normals, [1.0, 1.0], [sqrt
 gfs = (Rankine(), RankineReflected(), GFWu())
 gfs_del = (DelhommeauRankine(), DelhommeauRankineReflected(), GFWu())
 k = 1.0
-ω = 1.0
-bc = [-1im * ω * n[3] for n in smesh.normals]
+smoke_ω = 1.0
+bc = [-1im * smoke_ω * n[3] for n in smesh.normals]
 
 function enzyme_assembly_k_sum(kabs, gfs, smesh)
     S, _ = assemble_matrices(gfs, smesh, kabs)
@@ -161,8 +161,8 @@ end
         @test verts_ad == smesh.vertices
 
         dof = SVector(0.0, 0.0, 1.0)
-        A_fd_ω = ForwardDiff.derivative(w -> calculate_radiation_forces(smesh, dof, w)[1], ω)
-        A_ez_ω = first(Enzyme.gradient(mode, enzyme_A_of_omega, ω,
+        A_fd_ω = ForwardDiff.derivative(w -> calculate_radiation_forces(smesh, dof, w)[1], smoke_ω)
+        A_ez_ω = first(Enzyme.gradient(mode, enzyme_A_of_omega, smoke_ω,
             Enzyme.Const(smesh), Enzyme.Const(dof)))
         @test A_ez_ω ≈ A_fd_ω rtol=1e-5 atol=1e-6
 
@@ -174,7 +174,7 @@ end
             m = MH.StaticArraysMesh(
                 cT.(smesh.vertices), smesh.faces, centers, cT.(smesh.normals),
                 T.(smesh.areas), T.(smesh.radii), smesh.nvertices, smesh.nfaces)
-            return calculate_radiation_forces(m, dof, ω)[1]
+            return calculate_radiation_forces(m, dof, smoke_ω)[1]
         end
         fd_A_cx0 = ForwardDiff.derivative(fd_A_cx, smesh.centers[1][1])
         centers_A = copy(smesh.centers)
@@ -182,7 +182,7 @@ end
             Enzyme.Const(smesh.vertices), Enzyme.Const(smesh.faces),
             Enzyme.Const(smesh.normals), Enzyme.Const(smesh.areas),
             Enzyme.Const(smesh.radii), Enzyme.Const(smesh.nvertices),
-            Enzyme.Const(smesh.nfaces), Enzyme.Const(ω), Enzyme.Const(dof)))
+            Enzyme.Const(smesh.nfaces), Enzyme.Const(smoke_ω), Enzyme.Const(dof)))
         @test gA_cx[1][1] ≈ fd_A_cx0 rtol=1e-5 atol=1e-6
         @test centers_A == smesh.centers
 
@@ -193,7 +193,7 @@ end
                   cT(smesh.vertices[i]) for i in 1:smesh.nvertices]
             m = MH.StaticArraysMesh(vs, smesh.faces, cT.(smesh.centers), cT.(smesh.normals),
                 T.(smesh.areas), T.(smesh.radii), smesh.nvertices, smesh.nfaces)
-            return calculate_radiation_forces(m, dof, ω)[1]
+            return calculate_radiation_forces(m, dof, smoke_ω)[1]
         end
         fd_A_vx0 = ForwardDiff.derivative(fd_A_vx, smesh.vertices[1][1])
         verts_A = copy(smesh.vertices)
@@ -201,13 +201,13 @@ end
             Enzyme.Const(smesh.faces), Enzyme.Const(smesh.centers),
             Enzyme.Const(smesh.normals), Enzyme.Const(smesh.areas),
             Enzyme.Const(smesh.radii), Enzyme.Const(smesh.nvertices),
-            Enzyme.Const(smesh.nfaces), Enzyme.Const(ω), Enzyme.Const(dof)))
+            Enzyme.Const(smesh.nfaces), Enzyme.Const(smoke_ω), Enzyme.Const(dof)))
         @test gA_vx[1][1] ≈ fd_A_vx0 rtol=1e-5 atol=1e-6
         @test verts_A == smesh.vertices
 
-        A_fd_r = ForwardDiff.derivative(r -> enzyme_A_of_radius(r, smesh, ω, dof), 1.0)
+        A_fd_r = ForwardDiff.derivative(r -> enzyme_A_of_radius(r, smesh, smoke_ω, dof), 1.0)
         A_ez_r = first(Enzyme.gradient(mode, enzyme_A_of_radius, 1.0,
-            Enzyme.Const(smesh), Enzyme.Const(ω), Enzyme.Const(dof)))
+            Enzyme.Const(smesh), Enzyme.Const(smoke_ω), Enzyme.Const(dof)))
         @test isfinite(A_ez_r)
         @test A_ez_r ≈ A_fd_r rtol=1e-5 atol=1e-6
     else

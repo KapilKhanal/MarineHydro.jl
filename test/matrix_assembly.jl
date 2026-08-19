@@ -67,13 +67,13 @@ end
     end
 end
 
-@testset "solve reuses Rankine and matches per-problem solves" begin
+    @testset "batch solve matches per-problem solves" begin
     mesh4 = Mesh(MarineHydro.example_mesh_from_capytaine(4))
     body = FloatingBody(mesh4, ["Heave"], [0.0, 0.0, 0.0], "sphere")
     parameters = (wave_frequencies=[1.0, 1.4], radiating_dofs=[:Heave], influenced_dofs=[:Heave])
     problems = problems_from_data(parameters, body)
-    @test eltype(problems) <: RadiationProblem
-    @test problems[1] isa RadiationProblem{Float64}
+    @test eltype(problems.radiation) <: RadiationProblem
+    @test problems.radiation[1] isa RadiationProblem{Float64}
     @test mesh4.nfaces isa Int
     @test typeof(MarineHydro.partition_greens_functions(greens_functions)) ==
           Tuple{Tuple{Rankine, RankineReflected}, Tuple{GFWu}}
@@ -82,8 +82,8 @@ end
     @test dual_prob isa RadiationProblem{<:ForwardDiff.Dual}
     @test typeof(dual_prob.omega) === typeof(dual_ω)
     @test typeof(dual_prob.wavenumber) === typeof(dual_ω)
-    reused = solve(problems, DirectBEM())
-    separate = [solve(p, DirectBEM()) for p in problems]
+    reused = solve(problems.radiation, DirectBEM())
+    separate = [solve(p, DirectBEM()) for p in problems.radiation]
     for (a, b) in zip(reused, separate)
         @test a.forces.Heave ≈ b.forces.Heave rtol=1e-10 atol=1e-12
         @test added_mass(a).Heave ≈ added_mass(b).Heave rtol=1e-10 atol=1e-12
