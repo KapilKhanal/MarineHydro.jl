@@ -1,13 +1,13 @@
-![Test Status](https://github.com/symbiotic-engineering/MarineHydro.jl/actions/workflows/run_tests.yml/badge.svg)
-![GitHub](https://img.shields.io/github/license/symbiotic-engineering/MDOcean)
-[![DOI](https://zenodo.org/badge/913583350.svg)](https://doi.org/10.5281/zenodo.19859297)
+![Test Status](https://github.com/JuliaOceanWaves/MarineHydro.jl/actions/workflows/run_tests.yml/badge.svg)
+![GitHub](https://img.shields.io/github/license/JuliaOceanWaves/MarineHydro.jl)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19859297.svg)](https://doi.org/10.5281/zenodo.19859297)
 [![SciML Code Style](https://img.shields.io/static/v1?label=code%20style&message=SciML&color=9558b2&labelColor=389826)](https://github.com/SciML/SciMLStyle)
 
 # MarineHydro.jl
 
 Differentiable boundary-element solver for marine hydrodynamics: radiation and diffraction, direct and indirect formulations, Wu and Delhommeau Green functions.
 
-The user-facing API is OrdinaryDiffEq-like:
+The user-facing API is mostly:
 
 `problem` + `formulation` → `solve` → real coefficients → [DifferentiationInterface](https://github.com/JuliaDiff/DifferentiationInterface.jl)
 
@@ -36,7 +36,7 @@ Khanal, K., Michelén Ströfer, C. A., Ancellin, M., & Haji, M. N. (2025). Fully
 Julia from [julialang.org](https://julialang.org/downloads/). Capytaine must be importable from the Python that [PyCall](https://github.com/JuliaPy/PyCall.jl) uses.
 
 ```bash
-git clone https://github.com/symbiotic-engineering/MarineHydro.jl.git
+git clone https://github.com/JuliaOceanWaves/MarineHydro.jl.git
 cd MarineHydro.jl
 ```
 
