@@ -53,7 +53,7 @@ function assemble_matrices_explicit_both(green_functions, mesh, wavenumber; dire
     return S, D
 end
 
-function assemble_matrices_broadcasting(greens_functions, mesh, wavenumber; direct=true, arrtype=Array, include_identity=true)
+function assemble_matrices_broadcasting(greens_functions, mesh, wavenumber; direct=true, arrtype=Array, include_identity=true, all_normals=nothing)
     # Broadcasting variant: `arrtype=CuArray` (or another GPU array type) uploads
     # isbits StaticElements and compiles the Green's kernels as a GPU broadcast.
     # Mesh geometry is constant for frequency AD; dropping it from the tape avoids
@@ -61,27 +61,30 @@ function assemble_matrices_broadcasting(greens_functions, mesh, wavenumber; dire
     elements = ChainRulesCore.ignore_derivatives() do
         arrtype([element(mesh, i) for i in 1:mesh.nfaces])
     end
-    return assemble_matrices_broadcasting(greens_functions, elements, wavenumber; direct, include_identity)
+    return assemble_matrices_broadcasting(greens_functions, elements, wavenumber; direct, include_identity, all_normals)
 end
 
 # Autodispatch when the caller already holds a GPU (or other) vector of elements.
 # Delhommeau `both_integral` S differs from `integral()` in the near field, so
 # S and D stay on those kernels. Rankine CPU assemble uses `assemble_birk_rankine`.
-function assemble_matrices_broadcasting(greens_functions, elements::AbstractVector, wavenumber; direct=true, include_identity=true)
+function assemble_matrices_broadcasting(greens_functions, elements::AbstractVector, wavenumber; direct=true, include_identity=true, all_normals=nothing)
     co_elements = reshape(elements, (1, length(elements)))
     S_kernel(e1, e2) = integral(greens_functions, e1, e2, wavenumber)
     S_matrix = (-1 / 4π) .* S_kernel.(elements, co_elements)
 
-    if direct
-        D_kernel(e1, e2) = normal(e2)' * integral_gradient(greens_functions, e1, e2, wavenumber; with_respect_to_first_variable=false)
-        D_matrix = (-1 / 4π) .* D_kernel.(elements, co_elements)
-    else
-        K_kernel(e1, e2) = normal(e1)' * integral_gradient(greens_functions, e1, e2, wavenumber; with_respect_to_first_variable=true)
-        D_matrix = (-1 / 4π) .* K_kernel.(elements, co_elements)
-    end
+    fixed = _fixed_normal(all_normals, real(eltype(S_matrix)))
+    _D_normal(e1, e2) = fixed === nothing ? (direct ? normal(e2) : normal(e1)) : fixed
+    D_kernel(e1, e2) = _D_normal(e1, e2)' * integral_gradient(greens_functions, e1, e2,
+        wavenumber; with_respect_to_first_variable=!direct)
+    D_matrix = (-1 / 4π) .* D_kernel.(elements, co_elements)
+
     T = eltype(D_matrix)
     include_identity || return S_matrix, D_matrix
-    return S_matrix, D_matrix + T(0.5) * I
+    if fixed === nothing
+        return S_matrix, D_matrix + T(0.5) * I
+    end
+    jump = [T(0.5) * (fixed' * normal(e)) for e in vec(elements)]
+    return S_matrix, D_matrix + Diagonal(jump)
 end
 
 # Vendor-agnostic panel-panel assembly. `get_backend(elements)` selects CPU,
@@ -163,11 +166,12 @@ assemble_matrices(green_functions, mesh, wavenumber; kwargs...) =
 
 function assemble_matrices(green_functions, mesh::StaticArraysMesh, wavenumber;
         direct=true, arrtype=Array, all_normals=nothing, include_identity=true)
-    if !isnothing(all_normals)
-        error("all_normals is not supported on the broadcasting / GPU assembly path; use a dense Mesh.")
+    if arrtype !== Array
+        isnothing(all_normals) || throw(ArgumentError(
+            "all_normals is not supported on the GPU assembly path; use arrtype=Array or a dense Mesh"))
+        return assemble_matrices_broadcasting(green_functions, mesh, wavenumber; direct, arrtype, include_identity)
     end
-    arrtype === Array || return assemble_matrices_broadcasting(green_functions, mesh, wavenumber; direct, arrtype, include_identity)
-    return _assemble_cpu(green_functions, mesh, wavenumber; direct, include_identity)
+    return _assemble_cpu(green_functions, mesh, wavenumber; direct, include_identity, all_normals)
 end
 
 assemble_matrices(green_functions, elements::AbstractVector, wavenumber; kwargs...) =
@@ -175,45 +179,69 @@ assemble_matrices(green_functions, elements::AbstractVector, wavenumber; kwargs.
 
 # CPU StaticArraysMesh. Concrete GF tuples skip `partition_greens_functions`.
 # Mutating loops here are Enzyme/ForwardDiff-safe; Zygote should use dense Mesh.
-function _assemble_cpu(gfs::Tuple{Rankine, RankineReflected, GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    SD = assemble_birk_rankine((Rankine(), RankineReflected()), mesh; direct, include_identity)
-    Sw, Dw = assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity=false)
+# `all_normals` replaces the panel normal in the D/K dot product (forward speed).
+function _assemble_cpu(gfs::Tuple{Rankine, RankineReflected, GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
+    SD = assemble_birk_rankine((Rankine(), RankineReflected()), mesh; direct, include_identity, all_normals)
+    Sw, Dw = assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity=false, all_normals)
     return SD[1] .+ Sw, SD[2] .+ Dw
 end
 
-function _assemble_cpu(gfs::Tuple{Rankine, RankineReflected}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    return assemble_birk_rankine(gfs, mesh; direct, include_identity)
+function _assemble_cpu(gfs::Tuple{Rankine, RankineReflected}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
+    return assemble_birk_rankine(gfs, mesh; direct, include_identity, all_normals)
 end
 
-function _assemble_cpu(gfs::Tuple{GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity)
+function _assemble_cpu(gfs::Tuple{GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
+    return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity, all_normals)
 end
 
-function _assemble_cpu(green_functions, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
+function _assemble_cpu(green_functions, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
     gfs = green_functions isa Tuple ? green_functions : (green_functions...,)
     static_gfs, wave_gfs = partition_greens_functions(gfs)
-    SD_static = isempty(static_gfs) ? nothing : _assemble_static_cpu(static_gfs, mesh; direct, include_identity)
+    SD_static = isempty(static_gfs) ? nothing : _assemble_static_cpu(static_gfs, mesh; direct, include_identity, all_normals)
     if isempty(wave_gfs)
         return SD_static
     end
     wave_identity = isnothing(SD_static) && include_identity
-    Sw, Dw = _assemble_wave_cpu(wave_gfs, mesh, wavenumber; direct, include_identity=wave_identity)
+    Sw, Dw = _assemble_wave_cpu(wave_gfs, mesh, wavenumber; direct, include_identity=wave_identity, all_normals)
     isnothing(SD_static) && return Sw, Dw
     return SD_static[1] .+ Sw, SD_static[2] .+ Dw
 end
 
-function _assemble_static_cpu(gfs::Tuple, mesh::StaticArraysMesh; direct=true, include_identity=true)
-    _birk_rankine_tuple(gfs) || return assemble_matrices_broadcasting(gfs, mesh, 0.0; direct, include_identity)
-    return assemble_birk_rankine(gfs, mesh; direct, include_identity)
+function _assemble_static_cpu(gfs::Tuple, mesh::StaticArraysMesh; direct=true, include_identity=true, all_normals=nothing)
+    _birk_rankine_tuple(gfs) || return assemble_matrices_broadcasting(gfs, mesh, 0.0; direct, include_identity, all_normals)
+    return assemble_birk_rankine(gfs, mesh; direct, include_identity, all_normals)
 end
 
-function _assemble_wave_cpu(gfs::Tuple{GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity)
+function _assemble_wave_cpu(gfs::Tuple{GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
+    return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity, all_normals)
 end
 
-function _assemble_wave_cpu(gfs::Tuple, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    length(gfs) == 1 && gfs[1] isa GFWu && return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity)
-    return assemble_matrices_broadcasting(gfs, mesh, wavenumber; direct, include_identity)
+function _assemble_wave_cpu(gfs::Tuple, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
+    length(gfs) == 1 && gfs[1] isa GFWu && return assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity, all_normals)
+    return assemble_matrices_broadcasting(gfs, mesh, wavenumber; direct, include_identity, all_normals)
+end
+
+# Fixed replacement normal (forward speed uses x̂). `nothing` keeps panel normals.
+_fixed_normal(::Nothing, ::Type) = nothing
+_fixed_normal(v, ::Type{T}) where {T} = SVector{3, T}(v[1], v[2], v[3])
+
+@inline _panel_or_fixed(::Nothing, direct::Bool, n2, normals, i) =
+    direct ? n2 : normals[i]
+@inline _panel_or_fixed(fixed::SVector, direct::Bool, n2, normals, i) = fixed
+
+# Diagonal jump `constant * (n' * norm_vec)` from the comprehension path: 1/2
+# with panel normals, 1/2 (a' nᵢ) with a fixed normal (submerged panels).
+function _add_identity!(D, ::Nothing, normals, half)
+    @inbounds for i in axes(D, 1)
+        D[i, i] += half
+    end
+    return D
+end
+function _add_identity!(D, fixed::SVector, normals, half)
+    @inbounds for i in axes(D, 1)
+        D[i, i] += half * (fixed' * normals[i])
+    end
+    return D
 end
 
 _birk_rankine_tuple(gfs::Tuple) = all(_is_birk_rankine, gfs)
@@ -243,7 +271,7 @@ end
     return (T=Tmat, qgc=qgc, local_corners=local_corners)
 end
 
-function assemble_birk_rankine(gfs::Tuple, mesh::StaticArraysMesh; direct=true, include_identity=true)
+function assemble_birk_rankine(gfs::Tuple, mesh::StaticArraysMesh; direct=true, include_identity=true, all_normals=nothing)
     n = mesh.nfaces
     centers = mesh.centers
     normals = mesh.normals
@@ -255,6 +283,7 @@ function assemble_birk_rankine(gfs::Tuple, mesh::StaticArraysMesh; direct=true, 
     image = need_I | need_N
 
     GT = eltype(eltype(centers))
+    fixed = _fixed_normal(all_normals, GT)
     scale = convert(GT, -1 / 4π)
     image_sign = convert(GT, (need_I ? 1 : 0) + (need_N ? -1 : 0))
     S = Matrix{Complex{GT}}(undef, n, n)
@@ -271,7 +300,7 @@ function assemble_birk_rankine(gfs::Tuple, mesh::StaticArraysMesh; direct=true, 
         Tmat, qgc, lc = geom.T, geom.qgc, geom.local_corners
         for i in 1:n
             c1 = centers[i]
-            nvec = direct ? n2 : normals[i]
+            nvec = _panel_or_fixed(fixed, direct, n2, normals, i)
             s = z
             d = z
             if need_R
@@ -296,30 +325,29 @@ function assemble_birk_rankine(gfs::Tuple, mesh::StaticArraysMesh; direct=true, 
         end
     end
     if include_identity
-        @inbounds for i in 1:n
-            D[i, i] += half
-        end
+        _add_identity!(D, fixed, normals, half)
     end
     return S, D
 end
 
-function assemble_wu_centers(mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true)
-    assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity)
+function assemble_wu_centers(mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
+    assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity, all_normals)
 end
 
-function assemble_wu_centers(mesh::StaticArraysMesh, wavenumber, ::Val{direct}; include_identity=true) where {direct}
-    _assemble_wu_centers_loop(mesh, wavenumber, Val(direct), include_identity)
+function assemble_wu_centers(mesh::StaticArraysMesh, wavenumber, ::Val{direct}; include_identity=true, all_normals=nothing) where {direct}
+    _assemble_wu_centers_loop(mesh, wavenumber, Val(direct), include_identity, all_normals)
 end
 
 # Fused S/D primal. No assemble rrule: ForwardDiff Duals and Enzyme/Mooncake
 # reverse trace this mutating loop (k and geometry). Zygote cannot.
-function _assemble_wu_centers_loop(mesh, k, ::Val{direct}, include_identity::Bool) where {direct}
+function _assemble_wu_centers_loop(mesh, k, ::Val{direct}, include_identity::Bool, all_normals=nothing) where {direct}
     n = mesh.nfaces
     centers = mesh.centers
     areas = mesh.areas
     normals = mesh.normals
     RT = promote_type(typeof(float(real(k))), eltype(areas))
     T = Complex{RT}
+    fixed = _fixed_normal(all_normals, RT)
     scale = convert(T, -1 / 4π)
     S = Matrix{T}(undef, n, n)
     D = Matrix{T}(undef, n, n)
@@ -328,17 +356,14 @@ function _assemble_wu_centers_loop(mesh, k, ::Val{direct}, include_identity::Boo
         a2 = areas[j]
         n2 = normals[j]
         for i in 1:n
-            nvec = direct ? n2 : normals[i]
+            nvec = _panel_or_fixed(fixed, direct, n2, normals, i)
             sij, dij = _wu_sd_centers(centers[i], c2, nvec, a2, k, Val(direct))
             S[i, j] = scale * sij
             D[i, j] = scale * dij
         end
     end
     if include_identity
-        half = convert(T, 0.5)
-        @inbounds for i in 1:n
-            D[i, i] += half
-        end
+        _add_identity!(D, fixed, normals, convert(T, 0.5))
     end
     return S, D
 end

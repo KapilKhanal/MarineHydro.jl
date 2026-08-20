@@ -23,12 +23,17 @@ struct Mesh{T, VT<:AbstractMatrix, FT<:AbstractMatrix, CT<:AbstractMatrix, NT<:A
                   radii::AbstractVector, nvertices, nfaces)
         T = eltype(vertices)
         nv = Int(size(vertices, 1))
-        @assert (size(vertices) == (nv, 3)) "each vertex needs 3 coordinates"
+        size(vertices) == (nv, 3) ||
+            throw(DimensionMismatch("each vertex needs 3 coordinates"))
         nf = Int(size(faces, 1))
-        @assert (size(faces) == (nf, 4)) "only quadrilateral panels are allowed"
-        @assert (size(centers) == (nf, 3)) "centers must be [nfaces x 3]"
-        @assert (length(areas) == nf) "areas vector must have length nfaces"
-        @assert (length(radii) == nf) "radii vector must have length nfaces"
+        size(faces) == (nf, 4) ||
+            throw(DimensionMismatch("only quadrilateral panels are allowed"))
+        size(centers) == (nf, 3) ||
+            throw(DimensionMismatch("centers must be [nfaces x 3]"))
+        length(areas) == nf ||
+            throw(DimensionMismatch("areas vector must have length nfaces"))
+        length(radii) == nf ||
+            throw(DimensionMismatch("radii vector must have length nfaces"))
         return new{T, typeof(vertices), typeof(faces), typeof(centers), typeof(normals), typeof(areas), typeof(radii)}(
             vertices, faces, centers, normals, areas, radii, nv, nf)
     end
@@ -310,8 +315,9 @@ end
 
 ############################ Differentiable Mesh #####################################
 function axisymmetric_mesh(profile::Meshes.Rope, n_theta::Integer=72)
-    @assert n_theta >= 3 "n_theta must be at least 3"
-    @assert length(profile.vertices) >= 2 "profile must contain at least two points"
+    n_theta >= 3 || throw(ArgumentError("n_theta must be at least 3"))
+    length(profile.vertices) >= 2 ||
+        throw(ArgumentError("profile must contain at least two points"))
 
     # Points: Revolve each 2D profile point (r, z) into a 3D ring,
     #  treat zero radius points as special cases
@@ -323,7 +329,7 @@ function axisymmetric_mesh(profile::Meshes.Rope, n_theta::Integer=72)
     for p in profile.vertices
         r = Meshes.coords(p).x
         z = Meshes.coords(p).y
-        @assert r >= zero(r) "profile radii must be nonnegative"
+        r >= zero(r) || throw(ArgumentError("profile radii must be nonnegative"))
         push!(ring_starts, length(points) + 1)
         if iszero(r)
             push!(ring_sizes, 1)
@@ -349,7 +355,7 @@ function axisymmetric_mesh(profile::Meshes.Rope, n_theta::Integer=72)
         size_2 = ring_sizes[layer+1]
 
         if size_1 == 1 && size_2 == 1
-            error("adjacent points cannot both have radius 0")
+            throw(ArgumentError("adjacent profile points cannot both have radius 0"))
         elseif size_1 == 1
             ir0 = start_1
             for i in 0:(n_theta-1)

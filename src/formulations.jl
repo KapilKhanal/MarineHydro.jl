@@ -25,7 +25,7 @@ function default_greens_functions(gf::String)
     elseif gf == "ExactGuevelDelhommeau"
         wave_gf = ExactGuevelDelhommeau()
     else
-        error("Unknown Green's function \"$gf\". Use \"Wu\" or \"ExactGuevelDelhommeau\".")
+        throw(ArgumentError("unknown Green's function \"$gf\"; use \"Wu\" or \"ExactGuevelDelhommeau\""))
     end
     return (Rankine(), RankineReflected(), wave_gf)
 end

@@ -35,16 +35,19 @@ _assembly_mesh(mesh) = mesh
 function _maybe_forward_speed_pressure(problem, wavenumber, mesh, hull_mask, sources,
         pressure_on_hull, formulation)
     iszero(problem.forward_speed) && return pressure_on_hull
-    is_direct(formulation) && error("MarineHydro.jl has yet to be developed for nonzero forward speeds with the direct method. Try changing direct to false.")
+    is_direct(formulation) && throw(ArgumentError(
+        "nonzero forward speed is not supported with the direct method; use IndirectBEM (direct = false)"))
     _, K = assemble_matrices(formulation.greens, mesh, wavenumber; direct=false, all_normals=[1, 0, 0])
-    partial_phi_partial_x = K * sources
-    return pressure_on_hull + SETTINGS.rho * problem.forward_speed * partial_phi_partial_x[hull_mask]
+    # `_mulvec`, not BLAS `*`: Enzyme reverse of zgemv needs `zger_64_`, which
+    # fails to load on some platforms (same workaround as the D·bc matvec).
+    partial_phi_partial_x = _mulvec(K, sources)
+    return pressure_on_hull + problem.rho * problem.forward_speed * partial_phi_partial_x[hull_mask]
 end
 
 function _finish_solve(problem, omega, wavenumber, S, D, mesh, hull_mask, bc, formulation)
     direct = is_direct(formulation)
     potential, sources = solve(D, S, bc; direct)
-    pressure = 1im * SETTINGS.rho * omega * potential
+    pressure = 1im * problem.rho * omega * potential
     pressure_on_hull = _maybe_forward_speed_pressure(problem, wavenumber, mesh, hull_mask,
         sources, pressure[hull_mask], formulation)
     forces = integrate_pressure(problem.floatingbody, problem.influenced_dofs, pressure_on_hull)

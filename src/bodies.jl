@@ -52,8 +52,9 @@ end
 
 
 # This is only used for forward speed problems, and rigid_dof_name must be a rigid body dof
-function evaluate_gradient_of_motion(mesh::Mesh, rigid_dof_name::String)
-    @assert rigid_dof_name in ("Surge","Sway","Heave","Roll","Pitch","Yaw") "forward speed problems are only developed for rigid body dofs"
+function evaluate_gradient_of_motion(mesh, rigid_dof_name::String)
+    rigid_dof_name in ("Surge", "Sway", "Heave", "Roll", "Pitch", "Yaw") ||
+        throw(ArgumentError("forward speed problems are only developed for rigid body dofs"))
     num_panels = mesh.nfaces
     ddofdx = zeros(num_panels, 3)
     if rigid_dof_name=="Pitch"
@@ -104,7 +105,7 @@ function rotational_dofs(mesh::StaticArraysMesh, dof_name::String, rotation_cent
     axis_of_rot = dof_name=="Roll" ? SVector{3,T}(1, 0, 0) :
                   dof_name=="Pitch" ? SVector{3,T}(0, 1, 0) :
                   dof_name=="Yaw" ? SVector{3,T}(0, 0, 1) :
-                  error("unknown rotational dof $dof_name")
+                  throw(ArgumentError("unknown rotational dof $dof_name"))
     rc = SVector{3,T}(T(rotation_center[1]), T(rotation_center[2]), T(rotation_center[3]))
     dof = zeros(T, mesh.nfaces, 3)
     @inbounds for i in 1:mesh.nfaces
