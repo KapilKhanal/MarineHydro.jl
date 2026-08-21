@@ -179,6 +179,65 @@ end
             @test J_old ≈ J_new rtol=1e-4 atol=1e-6
         end
 
+        @testset "coplanar vertical panel: signed-z AD of integral_gradient" begin
+            # Stacked vertical panels have GZ = n·r̄ = 0. Tilting the source normal
+            # off horizontal is the geometry-AD case abs(GZ)/sign(GZ)/ifelse(z≈0) miss.
+            function panel_from_vertices(verts)
+                a, b, c, d = verts[1, :], verts[2, :], verts[3, :], verts[4, :]
+                area1 = 0.5 * norm(cross(b - a, c - a))
+                area2 = 0.5 * norm(cross(c - a, d - a))
+                center = ((a + b + c) / 3 * area1 + (a + c + d) / 3 * area2) / (area1 + area2)
+                nraw = cross(b - a, c - a)
+                n = nraw / norm(nraw)
+                radius = maximum(norm(verts[i, :] .- center) for i in 1:4)
+                return (center=center, vertices=verts, normal=n, area=area1 + area2, radius=radius)
+            end
+            source_verts(ε, x0=0.0) = [
+                x0    -0.5  -3.0
+                x0     0.5  -3.0
+                x0+ε   0.5  -2.0
+                x0+ε  -0.5  -2.0
+            ]
+            e1_coplanar = (center=[0.0, 0.0, -0.5],)
+            e2_0 = panel_from_vertices(source_verts(0.0))
+            @test abs(dot(e1_coplanar.center - e2_0.center, e2_0.normal)) < 1e-14
+            @test e2_0.normal ≈ [1.0, 0.0, 0.0] atol=1e-14
+
+            function Gx(gf, ε)
+                _, g = MarineHydro.both_integral_and_integral_gradient(
+                    gf, e1_coplanar, panel_from_vertices(source_verts(ε));
+                    with_respect_to_first_variable=true)
+                return g[1]
+            end
+            S(gf, ε) = integral(gf, e1_coplanar, panel_from_vertices(source_verts(ε)))
+
+            for gf in (Rankine(), DelhommeauRankine())
+                @test Gx(gf, 0.0) ≈ 0.0 atol=1e-14
+                fd = (Gx(gf, 1e-3) - Gx(gf, -1e-3)) / 2e-3
+                ad = ForwardDiff.derivative(ε -> Gx(gf, ε), 0.0)
+                @test ad ≈ fd rtol=1e-3 atol=1e-4
+                @test isfinite(ad)
+                @test abs(ad) > 1e-3  # geometry derivative of D is not the abs/ifelse zero
+                # Potential is even in the tilt; first derivative at GZ=0 stays 0.
+                @test ForwardDiff.derivative(ε -> S(gf, ε), 0.0) ≈ 0.0 atol=1e-10
+            end
+            @test ForwardDiff.derivative(ε -> Gx(Rankine(), ε), 0.0) ≈
+                  ForwardDiff.derivative(ε -> Gx(DelhommeauRankine(), ε), 0.0) rtol=5e-2 atol=1e-3
+
+            e1_off = (center=[0.3, 0.0, -0.5],)
+            function Gx_off(gf, ε)
+                _, g = MarineHydro.both_integral_and_integral_gradient(
+                    gf, e1_off, panel_from_vertices(source_verts(ε));
+                    with_respect_to_first_variable=true)
+                return g[1]
+            end
+            for gf in (Rankine(), DelhommeauRankine())
+                fd = (Gx_off(gf, 1e-5) - Gx_off(gf, -1e-5)) / 2e-5
+                ad = ForwardDiff.derivative(ε -> Gx_off(gf, ε), 0.0)
+                @test ad ≈ fd rtol=1e-6 atol=1e-8
+            end
+        end
+
         @testset "Rankine ChainRules use analytic Birk derivatives" begin
             Tmat, qgc, local_corners, _ = MarineHydro.birk_panel_geometry(e2.vertices)
             p = Tmat' * (SVector{3}(e1.center) - SVector{3}(qgc))

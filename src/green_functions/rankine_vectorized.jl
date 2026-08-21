@@ -24,11 +24,43 @@ wavenumber_independent(::Rankine) = true
 const _BIRK_ZTOL = 1e-14
 const _BIRK_DKTOL = 1e-14
 
+# `abs(x)` and `sign(x)` zero Dual partials at x=0 (`sign(0)=0`). `ifelse` on the
+# primal keeps the Dual of `x`, which is the equivalent one-sided derivative of |x|
+# and matches signed-z AD through the coplanar (GZ=0) Rankine solid-angle term.
+@inline _abs_ad(x) = ifelse(x < zero(x), -x, x)
+@inline _sign_ad(x) = ifelse(x < zero(x), -one(x), one(x))
+
+@inline _primal_val(x) = x
+@inline _primal_val(x::ForwardDiff.Dual) = ForwardDiff.value(x)
+
+# Force primal 0 (coplanar solid angle) without discarding Dual/tangent information.
+@inline _zero_primal_keep_tangent(x) = x - oftype(x, _primal_val(x))
+
 # atan(num/den) in (-π/2, π/2) without dividing. Division by dx=0 on vertical
 # edges is IEEE-finite in primal (atan(±Inf)) but Dual/Zygote NaN.
+# Use `_abs_ad` rather than `abs` so Duals at den=0 (z=0 or vertical edges) keep ∂den.
 @inline function _atan_ratio(num, den)
-    flipped = ifelse(den < 0, -num, num)
-    return atan(flipped, abs(den))
+    flipped = ifelse(den < zero(den), -num, num)
+    return atan(flipped, _abs_ad(den))
+end
+
+# Birk uses signed z: φ_Ω = z Δatan, vz = Δatan. At z=0 the solid angle is 0;
+# keep Δatan's tangent so AD sees ∂(z atan(c/z))/∂geometry, not the `ifelse` branch.
+@inline function _inplane_atan(z, Δatan)
+    if abs(_primal_val(z)) <= _BIRK_ZTOL
+        return _zero_primal_keep_tangent(Δatan)
+    end
+    return Δatan
+end
+
+# Delhommeau near-field: same coplanar primal (AT=0 when |GZ| is tiny) with Duals
+# kept from atan. |GZ| / sign(GZ) use `_abs_ad` / `_sign_ad` (equivalent signed GZ).
+@inline function _delhommeau_atan(ANT, DNT, GZ, source_radius)
+    AT = atan(ANT, DNT)
+    if abs(_primal_val(GZ)) >= 1e-4 * _primal_val(source_radius)
+        return AT
+    end
+    return _zero_primal_keep_tangent(AT)
 end
 
 @inline function _corner_svector(vertices, k)
@@ -121,9 +153,11 @@ function velocity_potential(x, y, z, local_corners)
         log_term = log((rk + rk1 - dk) / (rk + rk1 + dk))
         log_part = ((x - xk) * dy - (y - yk) * dx) / dk * log_term
         # Rewrite (mk*ek - hk)/(z*rk) as (dy*ek - dx*hk)/(dx*z*rk) to allow vertical edges.
-        atan_part = ifelse(abs(z) <= _BIRK_ZTOL, zero(z),
-            z * (_atan_ratio(dy * ek - dx * hk, dx * z * rk) -
-                 _atan_ratio(dy * ek1 - dx * hk1, dx * z * rk1)))
+        # Signed z * Δatan; `_inplane_atan` zeros the primal at z=0 without killing Duals.
+        Δatan = _inplane_atan(z,
+            _atan_ratio(dy * ek - dx * hk, dx * z * rk) -
+            _atan_ratio(dy * ek1 - dx * hk1, dx * z * rk1))
+        atan_part = z * Δatan
         ifelse(dk <= _BIRK_DKTOL, zero(x), -(log_part + atan_part) / 4π)
     end
     return sum(contribs)
@@ -147,7 +181,7 @@ function velocity_derivatives(x, y, z, local_corners)
         log_term = log((rk + rk1 - dk) / (rk + rk1 + dk))
         vx = (dy / dk) * log_term
         vy = (-dx / dk) * log_term
-        vz = ifelse(abs(z) <= _BIRK_ZTOL, zero(z),
+        vz = _inplane_atan(z,
             _atan_ratio(dy * ek - dx * hk, dx * z * rk) -
             _atan_ratio(dy * ek1 - dx * hk1, dx * z * rk1))
         ifelse(dk <= _BIRK_DKTOL, zero(SVector(x, x, x)), SVector(vx, vy, vz))

@@ -53,12 +53,11 @@ function integral(::DelhommeauRankine, element_1, element_2, wavenumber=nothing)
             segment_length = norm(current_to_next)
             if segment_length >= 1e-3 * source_radius
                 GY = dot(point - current_vertex, cross(source_normal, current_to_next / segment_length))
-                if abs(GZ) >= 1e-4 * source_radius
-                    ANT = 2 * GY * segment_length
-                    DNT = (RR[index_next_vertex] + RR[index_vertex])^2 - segment_length^2 +
-                            2 * abs(GZ) * (RR[index_next_vertex] + RR[index_vertex])
-                    integral -= 2*abs(GZ) * atan(ANT, DNT)
-                end
+                ANT = 2 * GY * segment_length
+                DNT = (RR[index_next_vertex] + RR[index_vertex])^2 - segment_length^2 +
+                    2 * _abs_ad(GZ) * (RR[index_next_vertex] + RR[index_vertex])
+                AT = _delhommeau_atan(ANT, DNT, GZ, source_radius)
+                integral -= 2 * _abs_ad(GZ) * AT
                 if abs(GY) > 1e-5
                     ANL = RR[index_next_vertex] + RR[index_vertex] + segment_length
                     DNL = RR[index_next_vertex] + RR[index_vertex] - segment_length
@@ -101,30 +100,26 @@ function both_integral_and_integral_gradient(::DelhommeauRankine, element_1, ele
                 GY = dot(point - current_vertex, GYX)
                 ANT = 2 * GY * segment_length
                 DNT = (RR[index_next_vertex] + RR[index_vertex])^2 - segment_length^2 +
-                    2 * abs(GZ) * (RR[index_next_vertex] + RR[index_vertex])
+                    2 * _abs_ad(GZ) * (RR[index_next_vertex] + RR[index_vertex])
                 ANL = RR[index_next_vertex] + RR[index_vertex] + segment_length
                 DNL = RR[index_next_vertex] + RR[index_vertex] - segment_length
                 ALDEN = log(ANL / DNL)
-                if abs(GZ) >= 1e-4 * source_radius
-                    AT = atan(ANT, DNT)
-                else
-                    AT = zero(ANT)
-                end
+                AT = _delhommeau_atan(ANT, DNT, GZ, source_radius)
                 #error bound error in the line below...
                 ANLX = DRX[index_next_vertex] + DRX[index_vertex]
                 ANTX = 2 * segment_length * GYX
-                DNTX = 2 * (RR[index_next_vertex] + RR[index_vertex] + abs(GZ)) * ANLX +
-                    2 * sign(GZ) * (RR[index_next_vertex] + RR[index_vertex]) * source_normal
+                DNTX = 2 * (RR[index_next_vertex] + RR[index_vertex] + _abs_ad(GZ)) * ANLX +
+                    2 * _sign_ad(GZ) * (RR[index_next_vertex] + RR[index_vertex]) * source_normal
 
                 # Same S as `integral(::DelhommeauRankine)`: solid-angle atan plus log term.
-                integral -= 2 * abs(GZ) * AT
+                integral -= 2 * _abs_ad(GZ) * AT
                 if abs(GY) > 1e-5
                     integral += GY * ALDEN
                 end
                 integral_gradient = integral_gradient .-
-                                        (ALDEN .* GYX .- 2 * sign(GZ) * AT .* source_normal .+
-                                        GY * (DNL - ANL) ./ (ANL .* DNL) .* ANLX .-
-                                        2 * abs(GZ) .* (ANTX .* DNT .- DNTX .* ANT) ./ (ANT .* ANT .+ DNT .* DNT))
+                    (ALDEN .* GYX .- 2 * _sign_ad(GZ) * AT .* source_normal .+
+                    GY * (DNL - ANL) ./ (ANL .* DNL) .* ANLX .-
+                    2 * _abs_ad(GZ) .* (ANTX .* DNT .- DNTX .* ANT) ./ (ANT .* ANT .+ DNT .* DNT))
             end
         end
     end
