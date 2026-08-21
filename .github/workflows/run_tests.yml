@@ -26,6 +26,13 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # Manifest.toml files in this repo are resolved on Julia 1.12, where
+    # OpenSSL_jll is a stdlib. Instantiating that lockfile on 1.10 fails with
+    # "Failed to find path for package OpenSSL_jll". Drop them before cache
+    # and buildpkg so each matrix version resolves independently.
+    - name: Drop committed Manifests
+      run: rm -f Manifest.toml test/Manifest.toml
+
     - name: Install Capytaine
       run: |
          python -m venv /home/runner/.capy-venv
