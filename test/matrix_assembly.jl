@@ -121,6 +121,10 @@ end
             @test Dv ≈ Db rtol=1e-10 atol=1e-12
         end
     end
+    St, Dt = assemble_matrices(greens_functions, smesh, k)
+    Sv, Dv = assemble_matrices([Rankine(), RankineReflected(), GFWu()], smesh, k)
+    @test St ≈ Sv rtol=1e-12 atol=1e-12
+    @test Dt ≈ Dv rtol=1e-12 atol=1e-12
 end
 
 

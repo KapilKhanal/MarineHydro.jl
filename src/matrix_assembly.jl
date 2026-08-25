@@ -156,7 +156,7 @@ Assembles the influence matrices based on the tuple of provided Green's function
 #   StaticArraysMesh + `arrtype ≠ Array`      → broadcasting (GPU)
 #   AbstractVector of elements                → broadcasting (already uploaded)
 #   StaticArraysMesh CPU                      → `_assemble_cpu` on the GF tuple
-#     Tuple{Rankine, RankineReflected, GFWu}  → Birk Rankine + Wu centers
+#     Tuple{Rankine, RankineReflected, GFWu}  → fused Rankine+Wu (i,j) write
 #     Tuple{Rankine, RankineReflected}        → Birk Rankine
 #     Tuple{GFWu}                             → Wu centers
 #     other tuples / vectors                  → partition static vs wave, then
@@ -180,10 +180,10 @@ assemble_matrices(green_functions, elements::AbstractVector, wavenumber; kwargs.
 # CPU StaticArraysMesh. Concrete GF tuples skip `partition_greens_functions`.
 # Mutating loops here are Enzyme/ForwardDiff-safe; Zygote should use dense Mesh.
 # `all_normals` replaces the panel normal in the D/K dot product (forward speed).
+# Default DirectBEM/IndirectBEM: one (i,j) write of S and D. Duals and Enzyme
+# reverse trace this loop (no assemble rrule). Do not split Rankine/Wu then `.+`.
 function _assemble_cpu(gfs::Tuple{Rankine, RankineReflected, GFWu}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
-    SD = assemble_birk_rankine((Rankine(), RankineReflected()), mesh; direct, include_identity, all_normals)
-    Sw, Dw = assemble_wu_centers(mesh, wavenumber, Val(direct); include_identity=false, all_normals)
-    return SD[1] .+ Sw, SD[2] .+ Dw
+    return _assemble_rankine_wu_loop(mesh, wavenumber, Val(direct), include_identity, all_normals)
 end
 
 function _assemble_cpu(gfs::Tuple{Rankine, RankineReflected}, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
@@ -196,6 +196,13 @@ end
 
 function _assemble_cpu(green_functions, mesh::StaticArraysMesh, wavenumber; direct=true, include_identity=true, all_normals=nothing)
     gfs = green_functions isa Tuple ? green_functions : (green_functions...,)
+    # Vector greens from older call sites become a tuple; redispatch so the
+    # default Rankine+Wu path still hits the fused mutating loop.
+    if gfs isa Tuple{Rankine, RankineReflected, GFWu} ||
+       gfs isa Tuple{Rankine, RankineReflected} ||
+       gfs isa Tuple{GFWu}
+        return _assemble_cpu(gfs, mesh, wavenumber; direct, include_identity, all_normals)
+    end
     static_gfs, wave_gfs = partition_greens_functions(gfs)
     SD_static = isempty(static_gfs) ? nothing : _assemble_static_cpu(static_gfs, mesh; direct, include_identity, all_normals)
     if isempty(wave_gfs)
@@ -269,6 +276,66 @@ end
 @inline function _source_birk_geom(mesh::StaticArraysMesh, j)
     Tmat, qgc, local_corners, _ = birk_panel_geometry(_face_smatrix(mesh, j))
     return (T=Tmat, qgc=qgc, local_corners=local_corners)
+end
+
+# Rankine + free-surface image, unscaled φ and n·∇φ. `direct` is compile-time
+# so Enzyme/ForwardDiff do not carry a Bool branch in the fused (i,j) kernel.
+@inline function _rankine_reflected_sd(c1, c2, r2, a2, Tmat, qgc, lc, nvec, ::Val{true})
+    φ, gsrc = _vrankine_from_geom(c1, c2, r2, a2, Tmat, qgc, lc)
+    d = nvec' * _as_center_type(c1, gsrc)
+    c1r = _reflect_z(c1)
+    φr, gsrcr = _vrankine_from_geom(c1r, c2, r2, a2, Tmat, qgc, lc)
+    gr = _as_center_type(c1r, gsrcr)
+    return φ + φr, d + (nvec' * gr)
+end
+
+@inline function _rankine_reflected_sd(c1, c2, r2, a2, Tmat, qgc, lc, nvec, ::Val{false})
+    φ, gsrc = _vrankine_from_geom(c1, c2, r2, a2, Tmat, qgc, lc)
+    d = nvec' * _as_center_type(c1, -gsrc)
+    c1r = _reflect_z(c1)
+    φr, gsrcr = _vrankine_from_geom(c1r, c2, r2, a2, Tmat, qgc, lc)
+    gr = vertical_reflection(_as_center_type(c1r, -gsrcr))
+    return φ + φr, d + (nvec' * gr)
+end
+
+# Fused Rankine+image+Wu S/D. One Complex matrix pair; Duals and Enzyme reverse
+# trace this mutating loop. `@noinline` keeps `solve` small so Enzyme can
+# specialize `_finish_solve` (a too-large inlined kernel makes RadiationResult
+# abstract and Enzyme's activity analysis throws).
+@noinline function _assemble_rankine_wu_loop(mesh, k, ::Val{direct}, include_identity::Bool, all_normals=nothing) where {direct}
+    n = mesh.nfaces
+    centers = mesh.centers
+    normals = mesh.normals
+    areas = mesh.areas
+    radii = mesh.radii
+    GT = eltype(eltype(centers))
+    RT = promote_type(typeof(float(real(k))), eltype(areas), GT)
+    T = Complex{RT}
+    fixed = _fixed_normal(all_normals, RT)
+    scale = convert(T, -1 / 4π)
+    S = Matrix{T}(undef, n, n)
+    D = Matrix{T}(undef, n, n)
+    geoms = [_source_birk_geom(mesh, j) for j in 1:n]
+    @inbounds for j in 1:n
+        c2 = centers[j]
+        r2 = radii[j]
+        a2 = areas[j]
+        n2 = normals[j]
+        geom = geoms[j]
+        Tmat, qgc, lc = geom.T, geom.qgc, geom.local_corners
+        for i in 1:n
+            c1 = centers[i]
+            nvec = _panel_or_fixed(fixed, direct, n2, normals, i)
+            sr, dr = _rankine_reflected_sd(c1, c2, r2, a2, Tmat, qgc, lc, nvec, Val(direct))
+            sw, dw = _wu_sd_centers(c1, c2, nvec, a2, k, Val(direct))
+            S[i, j] = scale * (sr + sw)
+            D[i, j] = scale * (dr + dw)
+        end
+    end
+    if include_identity
+        _add_identity!(D, fixed, normals, convert(T, 0.5))
+    end
+    return S, D
 end
 
 function assemble_birk_rankine(gfs::Tuple, mesh::StaticArraysMesh; direct=true, include_identity=true, all_normals=nothing)

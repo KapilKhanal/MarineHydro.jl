@@ -164,6 +164,31 @@ end
         end
     end
 
+    @testset "Fused Rankine+Wu assemble d/dk via ForwardDiff (no assemble rrule)" begin
+        smesh = MarineHydro.StaticArraysMesh(mesh)
+        k0 = 1.2
+        gfs = (Rankine(), RankineReflected(), GFWu())
+        f(k) = begin
+            S, D = assemble_matrices(gfs, smesh, k)
+            return real(sum(S) + sum(D))
+        end
+        fd = ForwardDiff.derivative(f, k0)
+        @test isfinite(fd)
+        # Rankine is k-independent, so d/dk matches Wu-only (no identity).
+        g(k) = begin
+            S, D = MarineHydro.assemble_wu_centers(smesh, k, Val(true); include_identity=false)
+            return real(sum(S) + sum(D))
+        end
+        @test fd ≈ ForwardDiff.derivative(g, k0) rtol=1e-10 atol=1e-12
+        for direct in (true, false)
+            h(k) = begin
+                S, D = assemble_matrices(gfs, smesh, k; direct)
+                real(sum(S)) + imag(sum(D))
+            end
+            @test isfinite(ForwardDiff.derivative(h, k0))
+        end
+    end
+
     @testset "Fused Wu assemble d/dk via ForwardDiff (no assemble rrule)" begin
         smesh = MarineHydro.StaticArraysMesh(mesh)
         k0 = 1.2
