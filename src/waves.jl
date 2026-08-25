@@ -245,7 +245,7 @@ end
 function AiryBC(problem::DiffractionProblem)
     """Boundary condition for diffraction problem : the velocity on the floating body is the velocity of Airy wave field."""
     bcs = -sum(airy_waves_velocity(problem.floatingbody.mesh.centers, problem) .* problem.floatingbody.mesh.normals, dims = 2)
-    return bcs
+    return vec(bcs)
 end
 
 function compute_bc(problem::DiffractionProblem)

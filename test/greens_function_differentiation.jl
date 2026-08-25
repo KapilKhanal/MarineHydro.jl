@@ -192,6 +192,11 @@ end
             Jv = Zygote.jacobian(q -> MarineHydro.velocity_derivatives(q[1], q[2], q[3], local_corners), [x, y, z])[1]
             @test Jv ≈ collect(H) atol=1e-12
             @test Jv ≈ ForwardDiff.jacobian(q -> MarineHydro.velocity_derivatives(q[1], q[2], q[3], local_corners), [x, y, z]) rtol=1e-8
+
+            gφf = Zygote.gradient((a, b, c) -> MarineHydro.birk_phi_and_velocity(a, b, c, local_corners)[1], x, y, z)
+            @test [gφf[1], gφf[2], gφf[3]] ≈ collect(v) atol=1e-12
+            Jvf = Zygote.jacobian(q -> MarineHydro.birk_phi_and_velocity(q[1], q[2], q[3], local_corners)[2], [x, y, z])[1]
+            @test Jvf ≈ collect(H) atol=1e-12
         end
 
         if HAS_ENZYME

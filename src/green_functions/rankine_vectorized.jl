@@ -31,6 +31,10 @@ const _BIRK_DKTOL = 1e-14
     return atan(flipped, abs(den))
 end
 
+# Keep the z=0 (in-plane / self-influence) Dual/Zygote branch identical to
+# `velocity_potential` / `velocity_derivatives`: evaluate Δatan but return 0.
+@inline _inplane_atan(z, Δatan) = ifelse(abs(z) <= _BIRK_ZTOL, zero(z), Δatan)
+
 @inline function _corner_svector(vertices, k)
     T = eltype(vertices)
     return SVector{3,T}(vertices[k, 1], vertices[k, 2], vertices[k, 3])
@@ -200,6 +204,38 @@ function velocity_hessian(x, y, z, local_corners)
     return (-1 / 4π) .* sum(contribs)
 end
 
+# Fused eq. (46) + eqs. (47)–(49): one edge loop returning (φ, v). Same values
+# as `velocity_potential` / `velocity_derivatives` (φ's solid angle is z·vz per
+# edge), but the per-corner radii, per-edge log and the Δatan pair are computed
+# once instead of twice. This is the near-field hot path of `assemble_birk_rankine`.
+function birk_phi_and_velocity(x, y, z, local_corners)
+    sx = ntuple(k -> x - local_corners[k][1], 4)
+    sy = ntuple(k -> y - local_corners[k][2], 4)
+    r = ntuple(k -> sqrt(sx[k]^2 + sy[k]^2 + z^2), 4)
+    e = ntuple(k -> sx[k]^2 + z^2, 4)
+    h = ntuple(k -> sx[k] * sy[k], 4)
+    contribs = ntuple(4) do k
+        kn = mod1(k + 1, 4)
+        dx = local_corners[kn][1] - local_corners[k][1]
+        dy = local_corners[kn][2] - local_corners[k][2]
+        dk = hypot(dx, dy)
+        rsum = r[k] + r[kn]
+        log_term = log((rsum - dk) / (rsum + dk))
+        lt_dk = log_term / dk
+        Δatan = _atan_ratio(dy * e[k] - dx * h[k], dx * z * r[k]) -
+                _atan_ratio(dy * e[kn] - dx * h[kn], dx * z * r[kn])
+        vzk = _inplane_atan(z, Δatan)
+        φk = (sx[k] * dy - sy[k] * dx) * lt_dk + z * vzk
+        zc = zero(φk)
+        ifelse(dk <= _BIRK_DKTOL,
+            SVector(zc, zc, zc, zc),
+            SVector(φk, dy * lt_dk, -dx * lt_dk, vzk))
+    end
+    s = sum(contribs)
+    scale = -1 / 4π
+    return scale * s[1], SVector(scale * s[2], scale * s[3], scale * s[4])
+end
+
 # Reverse rules (Zygote ChainRules + EnzymeRules, including ForwardDiff
 # corner VJPs) live in `ReverseAD` (`src/ad_rules.jl`).
 
@@ -213,8 +249,7 @@ end
     PT = eltype(point)
     QT = eltype(qgc)
     field_local = Tmat' * (SVector{3,PT}(point[1], point[2], point[3]) - SVector{3,QT}(qgc[1], qgc[2], qgc[3]))
-    φ_birk = velocity_potential(field_local[1], field_local[2], field_local[3], local_corners)
-    v_local = velocity_derivatives(field_local[1], field_local[2], field_local[3], local_corners)
+    φ_birk, v_local = birk_phi_and_velocity(field_local[1], field_local[2], field_local[3], local_corners)
     v_global = Tmat * v_local
     φ = -4π * φ_birk
     grad_wrt_source = 4π .* v_global

@@ -350,11 +350,18 @@ end
 
 
 # Array matvec is a comprehension so Enzyme reverse does not enter BLAS `*`.
-# Reverse VJP is in ReverseAD (same as Zygote: ȳ bc', S' ȳ).
+# Reverse VJP is in ReverseAD (same as Zygote: ȳ bc', S' ȳ). Vector and
+# multi-RHS (N×k) share the same formula.
 function _mulvec(S::Array, bc::AbstractVector)
     n = length(bc)
     T = promote_type(eltype(S), eltype(bc))
     return T[sum(S[i, j] * bc[j] for j in 1:n) for i in 1:n]
+end
+function _mulvec(S::Array, bc::AbstractMatrix)
+    n, k = size(S, 1), size(bc, 2)
+    m = size(S, 2)
+    T = promote_type(eltype(S), eltype(bc))
+    return T[sum(S[i, j] * bc[j, c] for j in 1:m) for i in 1:n, c in 1:k]
 end
 _mulvec(S, bc) = S * bc
 
@@ -374,8 +381,12 @@ end
 # Primal LinearSolve. Use the returned `sol.u` (SciML/LinearSolve.jl#479).
 # Enzyme/Zygote never differentiate this body: ReverseAD intercepts
 # `_linearsolve` and runs IFT with primal solves only.
+# Pass `u0` with `b`'s shape: LinearSolve's default is `similar(b, size(A,2))`,
+# which collapses an N×k RHS to a Vector and then `ldiv!` fails.
 function _linearsolve(A, b)
-    sol = LinearSolve.solve(LinearSolve.LinearProblem(A, b), LinearSolve.LUFactorization())
+    T = promote_type(eltype(A), eltype(b))
+    u0 = similar(b, T)
+    sol = LinearSolve.solve(LinearSolve.LinearProblem(A, b; u0), LinearSolve.LUFactorization())
     return sol.u
 end
 
