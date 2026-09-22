@@ -2,7 +2,7 @@
 
 Julia BEM solver for wave–structure hydrodynamics. Setup and usage for the package itself are in `README.md` and `.github/workflows/run_tests.yml`.
 
-## Cursor Cloud specific instructions
+## Cdev info
 
 This is a library, not a server. There is no `dev` process to start. Development is a Julia REPL / script session with the root project and a Capytaine-enabled Python interpreter wired through PyCall.
 

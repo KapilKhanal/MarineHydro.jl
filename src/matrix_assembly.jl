@@ -434,7 +434,9 @@ function _uses_device_ldiv(A)
 end
 
 function solve(D, S, bc; direct::Bool=true)
-    b = vec(bc)
+    # Keep an N×k (matrix) RHS intact so `_mulvec(::Array, ::AbstractMatrix)`
+    # and LinearSolve's `u0` see the correct shape; only flatten other shapes.
+    b = bc isa AbstractMatrix ? bc : vec(bc)
     if direct
         ϕ = linsolve(D, _mulvec(S, b))
         sources = nothing
