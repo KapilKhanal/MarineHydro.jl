@@ -4,8 +4,8 @@
 Reverse-mode rules for Zygote (ChainRules) and Enzyme. Primals stay in
 `green_functions/` and `matrix_assembly.jl`. Both engines share the same VJPs:
 
-- Birk `velocity_potential` / `velocity_derivatives`: analytic field-point
-  VJP; panel-corner VJP via ForwardDiff through the primal
+- Birk `velocity_potential` / `velocity_derivatives` / `birk_phi_and_velocity`:
+  analytic field-point VJP; panel-corner VJP via ForwardDiff through the primal
 - `_linearsolve` / `gpu_linsolve`: implicit-function theorem (`z = A'\\ȳ`,
   `dA -= z y'`)
 - `_mulvec`: analytic matvec VJP (`dS = ȳ bc'`, `dbc = S' ȳ`)
@@ -13,7 +13,7 @@ Reverse-mode rules for Zygote (ChainRules) and Enzyme. Primals stay in
 module ReverseAD
 
 using ..MarineHydro: velocity_potential, velocity_derivatives, velocity_hessian,
-    _linearsolve, _mulvec, gpu_linsolve, _backend_ldiv
+    birk_phi_and_velocity, _linearsolve, _mulvec, gpu_linsolve, _backend_ldiv
 using ChainRulesCore
 using ForwardDiff
 using LinearAlgebra
@@ -207,6 +207,93 @@ function EnzymeRules.reverse(
 end
 
 # ---------------------------------------------------------------------------
+# Fused Birk (φ, v) kernel used by `_vrankine_from_geom`.
+# dφ/d(x,y,z) = v (the second primal output); dv/d(x,y,z) = Hessian.
+# Corner cotangents via ForwardDiff through the fused primal, as above.
+# ---------------------------------------------------------------------------
+
+function _phi_v_corners_adjoint(ȳφ, ȳv, x, y, z, local_corners)
+    J = ForwardDiff.jacobian(_flatten_corners(local_corners)) do c
+        φ, v = birk_phi_and_velocity(x, y, z, _unflatten_corners(c))
+        return SVector(φ, v[1], v[2], v[3])
+    end
+    w = SVector(ȳφ, ȳv[1], ȳv[2], ȳv[3])
+    return _unflatten_corners(J' * w)
+end
+
+@inline _phi_cotangent(ȳφ, φ) =
+    (ȳφ === nothing || ȳφ isa AbstractZero) ? zero(φ) : ȳφ
+@inline _v_cotangent(ȳv, v) =
+    (ȳv === nothing || ȳv isa AbstractZero) ? zero(v) : _cotangent_svector(ȳv)
+
+function ChainRulesCore.rrule(::typeof(birk_phi_and_velocity), x, y, z, local_corners)
+    φ, v = birk_phi_and_velocity(x, y, z, local_corners)
+    function birk_phi_and_velocity_pullback(ȳ)
+        if ȳ isa AbstractZero
+            return (NoTangent(), ZeroTangent(), ZeroTangent(), ZeroTangent(), ZeroTangent())
+        end
+        ȳu = unthunk(ȳ)
+        ȳφ = _phi_cotangent(ȳu[1], φ)
+        ȳv = _v_cotangent(ȳu[2], v)
+        H = velocity_hessian(x, y, z, local_corners)
+        g = ȳφ * v + H' * ȳv
+        Δcorners = _phi_v_corners_adjoint(ȳφ, ȳv, x, y, z, local_corners)
+        return (NoTangent(), g[1], g[2], g[3], Δcorners)
+    end
+    return (φ, v), birk_phi_and_velocity_pullback
+end
+
+function EnzymeRules.augmented_primal(
+    config::EnzymeRules.RevConfig,
+    ::Const{typeof(birk_phi_and_velocity)},
+    ::Type{RT},
+    x::Annotation,
+    y::Annotation,
+    z::Annotation,
+    local_corners::Annotation,
+) where {RT}
+    res = birk_phi_and_velocity(x.val, y.val, z.val, local_corners.val)
+    tape = (x.val, y.val, z.val, local_corners.val, res[2])
+    retres = EnzymeRules.needs_primal(config) ? res : nothing
+    dres = EnzymeRules.needs_shadow(config) ? map(zero, res) : nothing
+    return EnzymeRules.augmented_rule_return_type(config, RT)(retres, dres, tape)
+end
+
+function EnzymeRules.reverse(
+    ::EnzymeRules.RevConfig,
+    ::Const{typeof(birk_phi_and_velocity)},
+    dret::Active,
+    tape,
+    x::Annotation,
+    y::Annotation,
+    z::Annotation,
+    local_corners::Annotation,
+)
+    xv, yv, zv, cv, v = tape
+    ȳφ = _phi_cotangent(dret.val[1], v[1])
+    ȳv = _v_cotangent(dret.val[2], v)
+    H = velocity_hessian(xv, yv, zv, cv)
+    g = ȳφ * v + H' * ȳv
+    Δc = local_corners isa Const ? nothing : _phi_v_corners_adjoint(ȳφ, ȳv, xv, yv, zv, cv)
+    return (
+        _enz_arg_tangent(x, g[1]),
+        _enz_arg_tangent(y, g[2]),
+        _enz_arg_tangent(z, g[3]),
+        _enz_arg_tangent(local_corners, Δc),
+    )
+end
+
+function EnzymeRules.reverse(
+    ::EnzymeRules.RevConfig,
+    ::Const{typeof(birk_phi_and_velocity)},
+    ::Type{<:Const},
+    ::Any,
+    ::Annotation, ::Annotation, ::Annotation, ::Annotation,
+)
+    return (nothing, nothing, nothing, nothing)
+end
+
+# ---------------------------------------------------------------------------
 # Matvec: y = S bc.  dS = ȳ bc', dbc = S' ȳ  (adjoint, not transpose)
 # ---------------------------------------------------------------------------
 
@@ -227,7 +314,7 @@ function EnzymeRules.augmented_primal(
     ::Const{typeof(_mulvec)},
     ::Type{RT},
     S::Annotation{<:Array},
-    bc::Annotation{<:AbstractVector},
+    bc::Annotation{<:AbstractVecOrMat},
 ) where {RT}
     cache_S = EnzymeRules.overwritten(config)[2] ? copy(S.val) : S.val
     cache_bc = EnzymeRules.overwritten(config)[3] ? copy(bc.val) : bc.val
@@ -244,7 +331,7 @@ function EnzymeRules.reverse(
     ::Type{RT},
     cache,
     S::Annotation{<:Array},
-    bc::Annotation{<:AbstractVector},
+    bc::Annotation{<:AbstractVecOrMat},
 ) where {RT}
     cache_S, cache_bc, dys = cache
     width = EnzymeRules.width(config)

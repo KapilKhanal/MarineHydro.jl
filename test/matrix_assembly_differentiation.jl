@@ -164,6 +164,51 @@ end
         end
     end
 
+    @testset "solve multi-RHS (N×k) primal and AD" begin
+        D = rand(4, 4)
+        S = rand(4, 4)
+        bc = rand(4, 2)
+        for i in axes(D, 1)
+            D[i, i] += sum(abs, D[i, :])
+        end
+        for direct in (true, false)
+            ϕ, src = solve(D, S, bc; direct=direct)
+            @test size(ϕ) == (4, 2)
+            if !direct
+                @test size(src) == (4, 2)
+            end
+            ϕ1, _ = solve(D, S, bc[:, 1]; direct=direct)
+            ϕ2, _ = solve(D, S, bc[:, 2]; direct=direct)
+            @test ϕ[:, 1] ≈ ϕ1
+            @test ϕ[:, 2] ≈ ϕ2
+
+            fsum(D, S, bc) = real(sum(solve(D, S, bc; direct=direct)[1]))
+            zy = Zygote.gradient(fsum, D, S, bc)
+            @test all(isfinite, zy[1]) && all(isfinite, zy[2]) && all(isfinite, zy[3])
+            # Dual numbers take native `\`, which must accept the N×k RHS
+            e11 = zeros(size(D)); e11[1, 1] = 1
+            fdA = ForwardDiff.derivative(x -> fsum(D .+ x .* e11, S, bc), 0.0)
+            @test fdA ≈ zy[1][1, 1] rtol=1e-6 atol=1e-8
+
+            if HAS_ENZYME
+                mode = Enzyme.set_runtime_activity(Enzyme.Reverse)
+                function enzyme_solve_sum_mat(D, S, bc, direct)
+                    return real(sum(solve(D, S, bc; direct=direct)[1]))
+                end
+                ez = Enzyme.gradient(mode, enzyme_solve_sum_mat, copy(D), copy(S), copy(bc), Enzyme.Const(direct))
+                @test all(isfinite, ez[1]) && all(isfinite, ez[2]) && all(isfinite, ez[3])
+                @test ez[1] ≈ zy[1] rtol=1e-8 atol=1e-10
+                @test ez[2] ≈ zy[2] rtol=1e-8 atol=1e-10
+                @test ez[3] ≈ zy[3] rtol=1e-8 atol=1e-10
+            end
+        end
+
+        # N×1 diffraction-style RHS must not collapse to a Vector inside LinearSolve
+        bc1 = rand(4, 1)
+        ϕ, src = solve(D, S, bc1; direct=false)
+        @test size(ϕ) == (4, 1) && size(src) == (4, 1)
+    end
+
     @testset "Fused Wu assemble d/dk via ForwardDiff (no assemble rrule)" begin
         smesh = MarineHydro.StaticArraysMesh(mesh)
         k0 = 1.2

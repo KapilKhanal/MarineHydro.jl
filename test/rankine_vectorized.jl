@@ -152,6 +152,28 @@ end
     end
 end
 
+@testset "Fused Birk φ+v matches separate loops" begin
+    lc = (
+        SVector(-0.5, -0.5, 0.0),
+        SVector( 0.5, -0.5, 0.0),
+        SVector( 0.5,  0.5, 0.0),
+        SVector(-0.5,  0.5, 0.0),
+    )
+    for (x, y, z) in ((0.1, 0.2, 0.4), (0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (-0.25, 0.25, 0.5))
+        φ1 = MH.velocity_potential(x, y, z, lc)
+        v1 = MH.velocity_derivatives(x, y, z, lc)
+        φ2, v2 = MH.birk_phi_and_velocity(x, y, z, lc)
+        @test φ1 ≈ φ2 atol=1e-14 rtol=1e-14
+        @test v1 ≈ v2 atol=1e-14 rtol=1e-14
+    end
+    lc_tri = (SVector(-0.5, -0.5, 0.0), SVector(0.5, -0.5, 0.0), SVector(0.5, 0.5, 0.0), SVector(0.5, 0.5, 0.0))
+    φ1 = MH.velocity_potential(0.1, 0.2, 0.3, lc_tri)
+    v1 = MH.velocity_derivatives(0.1, 0.2, 0.3, lc_tri)
+    φ2, v2 = MH.birk_phi_and_velocity(0.1, 0.2, 0.3, lc_tri)
+    @test φ1 ≈ φ2 atol=1e-14 rtol=1e-14
+    @test v1 ≈ v2 atol=1e-14 rtol=1e-14
+end
+
 @testset "Rankine matches DelhommeauRankine" begin
     e1 = (center=[0.0, 0.0, -1.0],)
     e2 = (
